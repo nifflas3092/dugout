@@ -8,7 +8,7 @@ CFG="export const SUPABASE_URL='https://fake.supabase.co';export const SUPABASE_
 INDEX=re.sub(r' integrity="[^"]+"','',open(APP+'/index.html').read())  # the test double can't match the real library's hash
 srv=subprocess.Popen([sys.executable,'-m','http.server','8766','-d',APP],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 errs=[]; checks=[]
-def check(name, cond): checks.append(bool(cond)); print(('PASS ' if cond else 'FAIL ')+name)
+def check(name, cond, extra=''): checks.append(bool(cond)); print(('PASS ' if cond else 'FAIL ')+name+('' if cond or not extra else '   -> '+str(extra)[:300]))
 import datetime as _dt, base64 as _b64
 def met_forecast():
   now=_dt.datetime.now(_dt.timezone.utc).replace(minute=0,second=0,microsecond=0); ts=[]
@@ -78,9 +78,12 @@ async def main():
     check('player cannot delete captain post (only 1 delete button of 2 posts)', await pl.locator('.post').count()==2 and await pl.locator('[data-delpost]').count()==1)
 
     await pl.goto('http://localhost:8766/#subs'); await pl.wait_for_timeout(300); await pl.click('[data-mode=me]'); await pl.wait_for_selector('#af')
-    await pl.fill('#aName','Jordan'); await pl.fill('#aWhere','Etobicoke'); await pl.fill('#aContact','text 416-555-0100'); await pl.click('#aSave'); await pl.wait_for_timeout(800)
+    await pl.fill('#aName','Jordan'); await pl.fill('#aWhere','Etobicoke'); await pl.fill('#aContact','text 416-555-0100'); await pl.click('#aSave'); 
+    for _ in range(40):
+      if await pl.evaluate("JSON.parse(localStorage.getItem('fake-sb-db')).docs.some(d=>d.col==='contacts')"): break
+      await pl.wait_for_timeout(200)
     d=await pl.evaluate("JSON.parse(localStorage.getItem('fake-sb-db')).docs.filter(d=>d.col==='agents'||d.col==='contacts').map(d=>[d.col,JSON.stringify(d.data)])")
-    check('contact saved separately, not on the public profile', any(c=='contacts' for c,_ in d) and all('416' not in j for c,j in d if c=='agents'))
+    check('contact saved separately, not on the public profile', any(c=='contacts' for c,_ in d) and all('416' not in j for c,j in d if c=='agents'), str(d) + ' toast=' + await pl.inner_text('#toast'))
     await cap.goto('http://localhost:8766/#subs'); await cap.wait_for_timeout(500); await cap.click('[data-mode=find]'); await cap.wait_for_timeout(300)
     t=await cap.inner_text('#subBody')
     check('captain does not see contact before yes', '416-555' not in t and 'once they say yes' in t)
@@ -157,6 +160,35 @@ async def main():
     await pl.click('[data-nhide]'); check('players can tuck the notice away', await pl.locator('#notice.small [data-nshow]').count()==1)
     await cap.click('[data-nclear]'); await cap.wait_for_timeout(700); await pl.wait_for_timeout(500)
     check('captain removes it for everyone', await pl.locator('#notice').is_hidden())
+    # ---- league rulesets: OttawaSoftball, then OSSC
+    await cap.goto('http://localhost:8766/#roster'); await cap.wait_for_selector('#tRules')
+    await cap.select_option('#tRules','ottawasoftball'); await cap.click('#tf button[type=submit]'); await cap.wait_for_timeout(600)
+    check('team switched to OttawaSoftball rules; rules card shows them', 'OttawaSoftball' in await cap.inner_text('#rulesCard summary'))
+    async def setg(name, g):
+        await cap.locator(f'.panel:has(b:text-is("{name}")) [data-edit]').click(); await cap.select_option('#pG', g); await cap.click('#pfSave'); await cap.wait_for_timeout(250)
+    for nm,g in [('Casey','m'),('Jordan','m'),('Pat','w')]: await setg(nm,g)
+    for nm,g in [('Alex','m'),('Ben','m'),('Cole','m'),('Dana','m'),('Erin','w'),('Fay','w')]:
+        await cap.fill('#pName',nm); await cap.select_option('#pG',g); await cap.click('#pfSave'); await cap.wait_for_timeout(250)
+    for nm in ['Pat','Alex','Ben','Cole','Dana','Erin','Fay']:
+        await cap.locator(f'.panel:has(b:text-is("{nm}")) [data-rsvp][data-v=in]').click(); await cap.wait_for_timeout(200)
+    await cap.goto('http://localhost:8766/#schedule'); await cap.wait_for_timeout(400)
+    check('game card warns: 6 men and 3 women, a full team is 6 men and 4 women, with a find-a-sub button', 'A full team is 6 men and 4 women' in await cap.inner_text('.games') and await cap.locator('[data-findsub="w"]').count()>=1)
+    await cap.goto('http://localhost:8766/#lineup'); await cap.wait_for_selector('#rebuild'); await cap.click('#rebuild'); await cap.wait_for_timeout(800)
+    t=await cap.inner_text('#view')
+    check('OttawaSoftball lineup: 3 women rotate through 4 women’s spots and it meets the rules', t.count('Women’s spot ↻')==4 and 'Meets OttawaSoftball' in t, t[:400])
+    await cap.screenshot(path=OUT+'v6_os_lineup.png', full_page=True)
+    await cap.goto('http://localhost:8766/#score'); await cap.wait_for_selector('.rule-notes')
+    t=await cap.inner_text('.rule-notes'); check('scoring shows the 6-run limit, game clock and +2 home-run counts', 'Run limit 6' in t and 'No new inning after' in t and '+2 rule' in t, t)
+    await cap.goto('http://localhost:8766/#roster'); await cap.wait_for_selector('#tRules'); await cap.select_option('#tRules','ossc'); await cap.select_option('#tDiv','int')
+    await cap.click('#tf button[type=submit]'); await cap.wait_for_timeout(600)
+    await cap.goto('http://localhost:8766/#lineup'); await cap.wait_for_selector('#rebuild'); await cap.click('#rebuild'); await cap.wait_for_timeout(800)
+    t=await cap.inner_text('#view'); heads=await cap.locator('.lineup-scroll thead th').all_inner_texts()
+    rows=await cap.evaluate("[...document.querySelectorAll('.lineup-scroll tbody tr')].map(r=>[...r.querySelectorAll('select')].map(s=>s.value))")
+    on_field=[sum(1 for r in rows if r[i] != 'BN') for i in range(len(rows[0]))] if rows else []
+    check('OSSC lineup: 9 in the field with a rover and no fielding pitcher, someone pitches for us, meets the rules', 'Meets OSSC' in t and on_field and all(n==9 for n in on_field) and await cap.locator('#ourP').count()==1 and 'ROV' in await cap.inner_text('.lineup-scroll tbody'), str(on_field))
+    await cap.screenshot(path=OUT+'v6_ossc_lineup.png', full_page=True)
+    await cap.goto('http://localhost:8766/#score'); await cap.wait_for_selector('.rule-notes')
+    t=await cap.inner_text('.rule-notes'); check('OSSC scoring: 8-run limit, 3 pitches, +5 intermediate HR rule', 'Run limit 8' in t and '3 pitches' in t and '+5 rule' in t, t)
     await pl.goto('http://localhost:8766/#schedule'); await pl.wait_for_timeout(500)
     check('players see the rain-out but get no captain buttons', 'Rained out' in await pl.inner_text('#view') and await pl.locator('[data-makeup], [data-unrain], [data-rain]').count()==0)
 

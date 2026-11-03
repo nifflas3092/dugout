@@ -8,6 +8,7 @@ Team app for rec league slowpitch:
 - a team board
 - a league-wide sub finder with distance search
 - **game-day weather**: each upcoming game shows the forecast for its park and flags likely rain-outs, and the schedule tracks rained-out games until a makeup is scheduled
+- **League rules**: pick Standard, **OttawaSoftball (co-ed)** or **OSSC (Ottawa Sport & Social Club, mixed)** when you start a team or in Team settings. The lineup builder follows the league's batting-order and field rules (OttawaSoftball: max 2 men in a row, 4 women and max 6 men in the field, 3 women rotate through 4 spots; OSSC: max 2 of the same gender in a row, 8 positions plus a rover, the batting team pitches). Scoring shows the run limit, mercy rule, home-run limit and game clock; game cards warn when you're short of a gender and offer a sub search
 - **Gameday view**: game time, the field with one-tap directions, the forecast, your batting spot and starting position, who's pitching and the starting lineup
 - **Team notice banner**: captains post a red or orange notice ("Games cancelled tonight: fields closed") at the top of everyone's app, optionally clearing itself at midnight
 - **Lineup sharing**: send the batting order and positions by inning to the team chat as text, or save it as an image

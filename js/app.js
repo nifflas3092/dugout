@@ -1,10 +1,15 @@
 /* Dugout team app. The screens and logic; data access comes from ./platform.js */
 import { forecast, outlook, CREDIT } from './weather.js';
 import { renderGear, unreadCount, gearBusy } from './market.js';
+import { RULESETS, POS_NAME as RULE_POS_NAME, rulesFor, buildLineupFor, batterAt, lineupPlayers, lineupProblems, availabilityCheck, gameClock } from './rules.js';
 export function startApp(platform) {
 /* ---------- state ---------- */
 const POS = ['P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'LCF', 'RCF', 'RF'];
-const POS_NAME = { P: 'Pitcher', C: 'Catcher', '1B': 'First base', '2B': 'Second base', '3B': 'Third base', SS: 'Shortstop', LF: 'Left field', LCF: 'Left-center', RCF: 'Right-center', RF: 'Right field' };
+const POS_NAME = RULE_POS_NAME;
+const RULES = () => rulesFor(st.team);          // the team's league rules (Team tab → settings)
+const FPOS = () => RULES().pos;                // fielding positions under those rules
+const GENDER = { m: 'Man', w: 'Woman', x: 'Non-binary' };
+const slotLabel = (L, slot) => slot && slot[0] === '~' ? `${slot[1] === 'w' ? 'Women' : 'Men'}’s spot ↻ (${((L.rot || {})[slot[1]] || []).map(pName).join(', ')})` : pName(slot);
 const RESULTS = [
   { k: '1B', label: 'Single', cls: 'hit' }, { k: '2B', label: 'Double', cls: 'hit' }, { k: '3B', label: 'Triple', cls: 'hit' }, { k: 'HR', label: 'Home run', cls: 'hit' },
   { k: 'BB', label: 'Walk' }, { k: 'E', label: 'Reached on error' }, { k: 'SF', label: 'Sac fly' },
@@ -16,6 +21,7 @@ const view = document.getElementById('view');
 const LS = { get(k, d) { try { const v = localStorage.getItem('dugout-' + k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } }, set(k, v) { try { localStorage.setItem('dugout-' + k, JSON.stringify(v)); } catch (_) {} } };
 let me = null;                            // the roster spot linked to this account (players/<id>.uid), set when players load
 let selGame = LS.get('game', null);
+let openRules = false;                     // open the league-rules card when arriving at the Team tab
 const openLists = new Set();              // RSVP lists the viewer has opened, kept open when data updates
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -93,7 +99,7 @@ function renderSetup() {
 /* --- Games --- */
 /* ---------- Gameday: the three things you need walking in from the parking lot ---------- */
 const nextGame = () => sortedGames().find(g => g.status !== 'final' && g.status !== 'rainout' && g.date >= today());
-const posAt = (L, i, pid) => (L && L.field[i] ? POS.find(k => L.field[i][k] === pid) : null) || 'BN';
+const posAt = (L, i, pid) => (L && L.field[i] ? FPOS().find(k => L.field[i][k] === pid) : null) || 'BN';
 const ordinal = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 > 10 && n % 100 < 14) ? 0 : n % 10] || 'th');
 function mapsUrl(g) {
   const lat = g.lat ?? null, lng = g.lng ?? null;
@@ -108,8 +114,10 @@ function untilText(g) {
 }
 function gamedayCard(g, full) {
   const L = g.lineup, wx = gameWeather(g), maps = mapsUrl(g), isToday = g.date === today();
+  const rules = RULES(), myRot = me && L && L.rot ? Object.keys(L.rot).find(k => L.rot[k].includes(me)) : null;
   const mySpot = me && L ? L.order.indexOf(me) : -1, myPos = me && L ? posAt(L, 0, me) : null;
-  const pitcher = L && L.field[0] && L.field[0].P;
+  const pitcher = L ? (rules.offensePitcher ? L.pitcher : L.field[0] && L.field[0].P) : null;
+  const av = rules.coed ? availabilityCheck(st.players.filter(p => rsvpOf(g.id, p.id) === 'in'), rules) : null;
   return `<section class="panel gameday" aria-label="Gameday">
     <div class="row" style="align-items:flex-start"><span class="gd-tag">${isToday ? 'Gameday' : 'Next game · ' + esc(fmtDate(g.date).w + ' ' + fmtDate(g.date).m + ' ' + fmtDate(g.date).d)}</span>${full ? '' : `<a class="small gd-more" href="#gameday">Open gameday view →</a>`}</div>
     <div class="gd-time">${esc(fmtTime(g.time) || 'Time TBA')}</div>
@@ -117,10 +125,12 @@ function gamedayCard(g, full) {
     <div class="gd-field"><span aria-hidden="true">📍</span><span class="grow"><b>${esc(g.field || 'Field not set')}</b>${(st.diamonds.find(d => d.id === g.diamond) || {}).name ? `<span class="muted small" style="display:block">${esc(st.diamonds.find(d => d.id === g.diamond).name)}</span>` : ''}</span>
       ${maps ? `<a class="btn cta small" href="${esc(maps)}" target="_blank" rel="noopener">Directions</a>` : ''}</div>
     ${wx ? `<div class="wx wx-${wx.level}"><span class="wx-icon" aria-hidden="true">${wx.icon}</span><span class="grow"><b>${esc(wx.temp)}°C</b> · ${esc(wx.text)}</span></div>` : ''}
-    ${me ? (mySpot >= 0 ? `<div class="gd-you">You bat <b>${ordinal(mySpot + 1)}</b> · ${myPos === 'BN' ? 'start on the <b>bench</b>' : `start at <b>${esc(POS_NAME[myPos])}</b>`}</div>`
+    ${av ? `<div class="wx wx-${av.level === 'danger' ? 'high' : 'watch'}"><span class="wx-icon" aria-hidden="true">👥</span><span class="grow">${esc(av.text)}</span></div>` : ''}
+    ${me && myRot ? `<div class="gd-you">You bat in the rotating ${myRot === 'w' ? 'women’s' : 'men’s'} spots · ${myPos === 'BN' ? 'start on the <b>bench</b>' : `start at <b>${esc(POS_NAME[myPos])}</b>`}</div>` : ''}
+    ${me && !myRot ? (mySpot >= 0 ? `<div class="gd-you">You bat <b>${ordinal(mySpot + 1)}</b> · ${myPos === 'BN' ? 'start on the <b>bench</b>' : `start at <b>${esc(POS_NAME[myPos])}</b>`}</div>`
       : `<div class="gd-you"><span class="grow">Are you playing?</span>${rsvpSeg(g.id, me)}</div>`) : ''}
-    ${L ? `${pitcher ? `<div class="small" style="margin-top:8px">Pitching: <b>${esc(pName(pitcher))}</b></div>` : ''}
-      <ol class="gd-order">${L.order.map((p, i) => `<li${p === me ? ' class="me"' : ''}><span class="n">${i + 1}</span><span class="grow">${esc(pName(p))}</span><span class="pos${posAt(L, 0, p) === 'BN' ? ' bench' : ''}">${esc(posAt(L, 0, p))}</span></li>`).join('')}</ol>
+    ${L ? `${pitcher ? `<div class="small" style="margin-top:8px">${rules.offensePitcher ? 'Pitching for us when we bat' : 'Pitching'}: <b>${esc(pName(pitcher))}</b></div>` : ''}
+      <ol class="gd-order">${L.order.map((p, i) => `<li${p === me ? ' class="me"' : ''}><span class="n">${i + 1}</span><span class="grow">${esc(slotLabel(L, p))}</span>${p[0] === '~' ? '<span class="pos bench">↻</span>' : `<span class="pos${posAt(L, 0, p) === 'BN' ? ' bench' : ''}">${esc(posAt(L, 0, p))}</span>`}</li>`).join('')}</ol>
       <div class="row">${full ? `<button class="btn ghost small" type="button" data-sharelu="${esc(g.id)}">Share lineup</button>` : ''}<a class="btn ghost small" href="#lineup" data-golu="${esc(g.id)}">Full lineup by inning</a></div>`
       : `<p class="muted small" style="margin-top:8px">${st.canEdit ? 'No lineup yet. Build it on the Lineup tab.' : 'The lineup isn’t posted yet.'}</p>`}
   </section>`;
@@ -141,12 +151,13 @@ function lineupText(g) {
   const L = g.lineup; if (!L) return '';
   const pad = (t, n) => (t + ' '.repeat(n)).slice(0, n);
   return `⚾ ${st.team?.name || 'Lineup'}: ${gameWhen(g)} ${g.home ? 'vs' : '@'} ${g.opp}${g.field ? ' (' + g.field + ')' : ''}\n\n` +
-    `BATTING ORDER · position each inning\n` +
-    L.order.map((p, i) => `${i + 1}. ${pName(p)}: ${L.field.map((_, k) => posAt(L, k, p)).join(' ')}`).join('\n') +
-    `\n\nBN = bench that inning. Full lineup in Dugout:`;
+    `BATTING ORDER\n` + L.order.map((p, i) => `${i + 1}. ${slotLabel(L, p)}`).join('\n') +
+    `\n\nIN THE FIELD (innings 1–${L.field.length})\n` + lineupPlayers(L).map(p => `${pName(p)}: ${L.field.map((_, k) => posAt(L, k, p)).join(' ')}`).join('\n') +
+    (RULES().offensePitcher && L.pitcher ? `\n\nPitching for us: ${pName(L.pitcher)}` : '') +
+    `\n\nBN = bench that inning${RULES().id === 'ossc' ? ', ROV = rover' : ''}. Full lineup in Dugout:`;
 }
 async function lineupImage(g) {
-  const L = g.lineup, n = L.order.length, inn = L.field.length;
+  const L = g.lineup, people = lineupPlayers(L), n = people.length, inn = L.field.length;
   const W = 1080, rowH = 66, top = 250, H = top + n * rowH + 110, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
   const x = cv.getContext('2d'), disp = '"Barlow Condensed", "Arial Narrow", Arial, sans-serif', body = '"Atkinson Hyperlegible", Arial, sans-serif';
   try { await document.fonts.ready; } catch (_) {}
@@ -158,10 +169,10 @@ async function lineupImage(g) {
   x.fillStyle = '#475569'; x.font = `700 22px ${body}`;
   for (let k = 0; k < inn; k++) { x.textAlign = 'center'; x.fillText(`INN ${k + 1}`, x0 + colW * k + colW / 2, top - 22); }
   x.textAlign = 'left';
-  L.order.forEach((p, i) => {
-    const y = top + i * rowH;
+  people.forEach((p, i) => {
+    const y = top + i * rowH, spot = L.order.indexOf(p);
     x.fillStyle = i % 2 ? '#f8fafc' : '#ffffff'; x.fillRect(32, y, W - 64, rowH);
-    x.fillStyle = '#3b8256'; x.font = `800 34px ${disp}`; x.fillText(String(i + 1), 52, y + 44);
+    x.fillStyle = '#3b8256'; x.font = `800 34px ${disp}`; x.fillText(spot >= 0 ? String(spot + 1) : '↻', 52, y + 44);
     x.fillStyle = '#0f172a'; x.font = `700 30px ${body}`; x.fillText(pName(p).slice(0, 20), 118, y + 43);
     for (let k = 0; k < inn; k++) {
       const pos = posAt(L, k, p), cx = x0 + colW * k + colW / 2;
@@ -169,7 +180,7 @@ async function lineupImage(g) {
       x.fillStyle = pos === 'BN' ? '#64748b' : '#0f172a'; x.font = `700 24px ${body}`; x.textAlign = 'center'; x.fillText(pos, cx, y + 42); x.textAlign = 'left';
     }
   });
-  x.fillStyle = '#475569'; x.font = `400 24px ${body}`; x.fillText('BN = bench that inning · P (gold) = pitching · made with Dugout', 48, H - 44);
+  x.fillStyle = '#475569'; x.font = `400 24px ${body}`; x.fillText(`BN = bench${RULES().id === 'ossc' ? ' · ROV = rover' : ' · P (gold) = pitching'}${Object.keys(L.rot || {}).length ? ' · ↻ = rotating spot' : ''} · made with Dugout`, 48, H - 44);
   return new Promise(r => cv.toBlob(r, 'image/png'));
 }
 async function saveLineupImage(g) {
@@ -242,6 +253,7 @@ function renderSchedule() {
   view.querySelectorAll('[data-makeup]').forEach(b => b.addEventListener('click', () => { gameForm(null, st.games.find(g => g.id === b.dataset.makeup)); document.getElementById('gameForm').scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
   view.querySelectorAll('.game [data-rsvp], .rsvp-list [data-rsvp]').forEach(b => b.addEventListener('click', () => setRsvp(b.dataset.g, b.dataset.p, b.dataset.v)));
   bindGameday();
+  view.querySelectorAll('[data-findsub]').forEach(b => b.onclick = () => { F.gender = b.dataset.findsub; F.activeOnly = true; saveF(); subMode = 'find'; LS.set('submode', 'find'); location.hash = '#subs'; });
   const pn = document.getElementById('postNotice'); if (pn) pn.onclick = () => noticeForm();
   view.querySelectorAll('[data-me]').forEach(b => b.addEventListener('click', () => write(() => platform.claimPlayer(b.dataset.me), 'Got it. You can answer for yourself now.')));
   view.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { const el = document.getElementById('rs-' + b.dataset.open); el.hidden = !el.hidden; if (el.hidden) openLists.delete(b.dataset.open); else openLists.add(b.dataset.open); b.setAttribute('aria-expanded', !el.hidden); b.textContent = el.hidden ? 'Show everyone' : 'Hide list'; }));
@@ -274,7 +286,9 @@ function gameCard(g) {
     ${final ? '' : `<div class="count-pills" aria-label="Attendance">
       <span class="pill in">${counts.in} in</span><span class="pill maybe">${counts.maybe} maybe</span><span class="pill out">${counts.out} out</span>
       ${noReply ? `<span class="pill" style="border:1.5px solid var(--line)">${noReply} no reply</span>` : ''}
-      ${counts.in < 10 ? `<span class="pill warn">Need ${10 - counts.in} more for a full field</span>` : ''}
+      ${(() => { const av = RULES().coed ? availabilityCheck(st.players.filter(p => rsvpOf(g.id, p.id) === 'in'), RULES()) : null;
+        if (av) return `<span class="pill ${av.level === 'danger' ? 'out' : 'warn'}">${esc(av.text)}</span>${st.canEdit && av.need ? `<button class="btn ghost small" type="button" data-findsub="${esc(av.need)}">Find a ${av.need === 'w' ? 'woman' : 'man'} sub</button>` : ''}`;
+        return !RULES().coed && counts.in < RULES().field ? `<span class="pill warn">Need ${RULES().field - counts.in} more for a full field</span>` : ''; })()}
     </div>
     ${meRow ? `<div class="rsvp-row me"><span class="who">${esc(meRow.name)}</span>${rsvpSeg(g.id, meRow.id)}</div>` : ''}
     <div class="row"><button class="btn ghost small" type="button" data-open="${esc(g.id)}" aria-expanded="${openLists.has(g.id)}" aria-controls="rs-${esc(g.id)}">${openLists.has(g.id) ? 'Hide list' : 'Show everyone'}</button></div>
@@ -390,50 +404,36 @@ function gameForm(g, makeupOf = null) {
 function buildLineup(game) {
   const games = sortedGames(), idx = Math.max(0, games.findIndex(x => x.id === game.id));
   let avail = st.players.filter(p => rsvpOf(game.id, p.id) === 'in');
-  if (avail.length < 9) avail = avail.concat(st.players.filter(p => rsvpOf(game.id, p.id) === 'maybe'));
+  if (avail.length < RULES().field) avail = avail.concat(st.players.filter(p => rsvpOf(game.id, p.id) === 'maybe'));
   if (!avail.length) avail = st.players.filter(p => rsvpOf(game.id, p.id) !== 'out');
-  const n = avail.length; if (!n) return null;
-  const shift = idx % n;                        // the top of the order moves down one spot each game
-  const order = avail.slice(shift).concat(avail.slice(0, shift)).map(p => p.id);
-  const innings = (st.team && st.team.innings) || 7, sits = {}, played = {}, field = [];
-  order.forEach(id => { sits[id] = 0; played[id] = {}; });
-  for (let i = 0; i < innings; i++) {
-    const benchN = Math.max(0, n - POS.length);
-    // whoever has sat the least sits next; ties go to whoever is lower in the order this inning
-    const benchPick = [...order].sort((a, b) => sits[a] - sits[b] || ((order.indexOf(b) + i) % n) - ((order.indexOf(a) + i) % n)).slice(0, benchN);
-    benchPick.forEach(id => sits[id]++);
-    const on = order.filter(id => !benchPick.includes(id)), slot = {};
-    for (const pos of POS) {
-      const free = on.filter(id => !Object.values(slot).includes(id)); if (!free.length) break;
-      const likes = free.filter(id => (st.players.find(p => p.id === id).pos || []).includes(pos));
-      const pool = likes.length ? likes : free;
-      pool.sort((a, b) => (played[a][pos] || 0) - (played[b][pos] || 0));
-      slot[pos] = pool[0]; played[pool[0]][pos] = (played[pool[0]][pos] || 0) + 1;
-    }
-    field.push({ ...slot, bench: benchPick });
-  }
-  return { order, field };
+  return buildLineupFor(avail, RULES(), { innings: (st.team && st.team.innings) || 7, gameIndex: idx });
 }
 function renderLineup() {
-  const gid = defaultGame(), g = st.games.find(x => x.id === gid);
+  const gid = defaultGame(), g = st.games.find(x => x.id === gid), rules = RULES(), POSL = rules.pos;
   if (!g) { view.innerHTML = `<h2>Lineup</h2><div class="panel empty">Add a game on the Games tab, then build its lineup here.</div>`; return; }
-  const L = g.lineup, innings = L ? L.field.length : (st.team?.innings || 7);
+  const L = g.lineup, innings = L ? L.field.length : (st.team?.innings || 7), people = lineupPlayers(L);
+  const problems = L ? lineupProblems(L, st.players, rules) : [];
   view.innerHTML = `<h2>Lineup</h2>
   ${gamePicker(gid)}
-  ${!L ? `<div class="panel"><p>No lineup yet for this game.</p>${st.canEdit ? `<p class="muted small">Build one from everyone who said <b>In</b>. Batting order moves down a spot each game, and bench innings are shared out evenly. Players get their listed positions first.</p><div class="row"><button class="btn cta" id="build" type="button">Build fair lineup</button></div>` : '<p class="muted small">The captain will post it before the game.</p>'}</div>` : `
-  <div class="row"><div class="grow muted small">${L.order.length} players · ${innings} innings${L.order.length > 10 ? ` · each player sits about ${Math.round((L.order.length - 10) * innings / L.order.length * 10) / 10} innings` : ''}</div>
+  ${rules.coed ? `<p class="muted small" style="margin-top:-4px">Following <b>${esc(rules.short)}</b> rules. <a href="#roster" data-rulesjump>See rules</a></p>` : ''}
+  ${!L ? `<div class="panel"><p>No lineup yet for this game.</p>${st.canEdit ? `<p class="muted small">Build one from everyone who said <b>In</b>. Batting order moves down a spot each game, bench innings are shared out evenly, and players get their listed positions first.${rules.coed ? ` It follows your league’s co-ed rules for the batting order and who’s in the field.` : ''}</p><div class="row"><button class="btn cta" id="build" type="button">Build fair lineup</button></div>` : '<p class="muted small">The captain will post it before the game.</p>'}</div>` : `
+  <div class="row"><div class="grow muted small">${people.length} players · ${innings} innings${people.length > POSL.length ? ` · each player sits about ${Math.round((people.length - POSL.length) * innings / people.length * 10) / 10} innings` : ''}</div>
   ${st.canEdit ? `<button class="btn ghost small" id="rebuild" type="button">Rebuild</button><button class="btn danger small" id="clearL" type="button">Clear</button>` : ''}</div>
   <div class="row" style="margin-top:6px"><button class="btn cta small" id="shareLu" type="button">Send to team chat</button><button class="btn ghost small" id="imgLu" type="button">Save as image</button></div>
+  ${problems.length ? `<div class="notice small" style="margin-top:10px" role="alert"><b>Check against ${esc(rules.short)} rules:</b><ul style="margin:4px 0 0;padding-left:18px">${problems.map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>` : rules.coed ? `<p class="small" style="color:var(--in);margin:8px 0 0">✓ Meets ${esc(rules.short)} batting-order and field rules.</p>` : ''}
+  ${rules.offensePitcher ? `<label for="ourP" style="margin-top:10px">Pitches for us when we bat<select id="ourP" ${st.canEdit ? '' : 'disabled'}><option value="">Not picked</option>${people.map(id => `<option value="${esc(id)}"${L.pitcher === id ? ' selected' : ''}>${esc(pName(id))}</option>`).join('')}</select></label>` : ''}
   <h3 style="margin-top:8px">Batting order</h3>
-  <ol class="panel" style="list-style:none;padding:8px 16px;margin:0;gap:0">${L.order.map((id, i) => `<li class="row" style="padding:6px 0;border-top:${i ? '1px solid var(--line)' : '0'}"><span class="order-num">${i + 1}</span><span class="grow"><b>${esc(pName(id))}</b> <span class="muted">${esc(pNum(id))}</span></span>${st.canEdit ? `<button class="iconbtn" type="button" data-up="${esc(i)}" aria-label="Move ${esc(pName(id))} up" ${i ? '' : 'disabled'}>↑</button><button class="iconbtn" type="button" data-down="${esc(i)}" aria-label="Move ${esc(pName(id))} down" ${i < L.order.length - 1 ? '' : 'disabled'}>↓</button>` : ''}</li>`).join('')}</ol>
+  <ol class="panel" style="list-style:none;padding:8px 16px;margin:0;gap:0">${L.order.map((id, i) => `<li class="row" style="padding:6px 0;border-top:${i ? '1px solid var(--line)' : '0'}"><span class="order-num">${i + 1}</span><span class="grow"><b>${esc(slotLabel(L, id))}</b> ${id[0] === '~' ? '' : `<span class="muted">${esc(pNum(id))}</span>`}${rules.coed && id[0] !== '~' && (st.players.find(p => p.id === id) || {}).g ? ` <span class="gtag">${esc((st.players.find(p => p.id === id) || {}).g.toUpperCase())}</span>` : ''}</span>${st.canEdit ? `<button class="iconbtn" type="button" data-up="${esc(i)}" aria-label="Move up" ${i ? '' : 'disabled'}>↑</button><button class="iconbtn" type="button" data-down="${esc(i)}" aria-label="Move down" ${i < L.order.length - 1 ? '' : 'disabled'}>↓</button>` : ''}</li>`).join('')}</ol>
   <h3 style="margin-top:18px">Positions by inning</h3>
-  <p class="muted small" style="margin:4px 0 8px">${st.canEdit ? 'Pick from a box to swap someone in; the player who had that spot moves to where they were.' : 'BN means on the bench that inning.'}</p>
+  <p class="muted small" style="margin:4px 0 8px">${st.canEdit ? 'Pick from a box to swap someone in; the player who had that spot moves to where they were.' : 'BN means on the bench that inning.'}${rules.id === 'ossc' ? ' ROV is the rover.' : ''}</p>
   <div class="lineup-scroll"><table>
     <thead><tr><th scope="col">Player</th>${L.field.map((_, i) => `<th scope="col" class="num">Inn ${i + 1}</th>`).join('')}</tr></thead>
-    <tbody>${L.order.map(id => `<tr><th scope="row" style="position:static;background:transparent;color:var(--ink);font:700 15px var(--font-body);text-transform:none;letter-spacing:0">${esc(pName(id))}</th>${L.field.map((inn, i) => { const pos = POS.find(k => inn[k] === id) || 'BN'; return `<td class="pos${pos === 'BN' ? ' bench' : ''}">${st.canEdit ? `<select aria-label="${esc(pName(id))}, inning ${i + 1}" data-cell="${esc(i)}" data-p="${esc(id)}" style="min-height:40px;width:auto;padding:4px 6px">${['BN', ...POS].map(k => `<option${k === pos ? ' selected' : ''}>${k}</option>`).join('')}</select>` : pos}</td>`; }).join('')}</tr>`).join('')}</tbody>
+    <tbody>${people.map(id => `<tr><th scope="row" style="position:static;background:transparent;color:var(--ink);font:700 15px var(--font-body);text-transform:none;letter-spacing:0">${esc(pName(id))}</th>${L.field.map((inn, i) => { const pos = POSL.find(k => inn[k] === id) || 'BN'; return `<td class="pos${pos === 'BN' ? ' bench' : ''}">${st.canEdit ? `<select aria-label="${esc(pName(id))}, inning ${i + 1}" data-cell="${esc(i)}" data-p="${esc(id)}" style="min-height:40px;width:auto;padding:4px 6px">${['BN', ...POSL].map(k => `<option${k === pos ? ' selected' : ''}>${k}</option>`).join('')}</select>` : pos}</td>`; }).join('')}</tr>`).join('')}</tbody>
   </table></div>
-  ${L.field.some(inn => POS.some(k => !inn[k])) ? `<p class="notice small" style="margin-top:10px">Some innings have open positions. With fewer than 10 players, play three outfielders.</p>` : ''}`}`;
+  ${L.field.some(inn => POSL.some(k => !inn[k])) ? `<p class="notice small" style="margin-top:10px">Some innings have open positions${rules.id === 'ossc' ? '. Short-handed, OSSC plays one fewer per missing player' : `. With fewer than ${POSL.length} players, play three outfielders`}.</p>` : ''}`}`;
   bindPicker();
+  const rj = view.querySelector('[data-rulesjump]'); if (rj) rj.onclick = () => { openRules = true; };
+  const op = document.getElementById('ourP'); if (op) op.onchange = () => write(() => db.doc('games/' + g.id).update({ lineup: { ...L, pitcher: op.value || null } }), 'Pitcher set');
   const sl = document.getElementById('shareLu'); if (sl) sl.onclick = () => shareSheet('Send the lineup to your team', lineupText(g));
   const il = document.getElementById('imgLu'); if (il) il.onclick = () => saveLineupImage(g).catch(() => toast('Couldn’t make the image'));
   const b = document.getElementById('build') || document.getElementById('rebuild');
@@ -443,9 +443,9 @@ function renderLineup() {
     const i = +(btn.dataset.up ?? btn.dataset.down), j = btn.dataset.up !== undefined ? i - 1 : i + 1, o = [...L.order];[o[i], o[j]] = [o[j], o[i]];
     write(() => db.doc('games/' + g.id).update({ lineup: { ...L, order: o } }));
   }));
-  view.querySelectorAll('select[data-cell]').forEach(s => s.addEventListener('change', () => {
-    const i = +s.dataset.cell, id = s.dataset.p, field = L.field.map(x => ({ ...x, bench: [...(x.bench || [])] })), inn = field[i];
-    const was = POS.find(k => inn[k] === id) || 'BN', want = s.value, other = want === 'BN' ? null : inn[want];
+  view.querySelectorAll('select[data-cell]').forEach(sel => sel.addEventListener('change', () => {
+    const i = +sel.dataset.cell, id = sel.dataset.p, field = L.field.map(x => ({ ...x, bench: [...(x.bench || [])] })), inn = field[i];
+    const was = POSL.find(k => inn[k] === id) || 'BN', want = sel.value, other = want === 'BN' ? null : inn[want];
     if (was !== 'BN') delete inn[was]; else inn.bench = inn.bench.filter(x => x !== id);
     if (want === 'BN') inn.bench.push(id); else inn[want] = id;
     if (other) { if (was === 'BN') inn.bench.push(other); else inn[was] = other; } // swap
@@ -466,7 +466,7 @@ function renderScore() {
   const innings = Math.max((st.team?.innings || 7), (g.us || []).length, (g.them || []).length, g.inning || 1);
   const abs = st.ab.filter(a => a.g === g.id).sort((a, b) => a.at - b.at);
   const order = g.lineup ? g.lineup.order : st.players.filter(p => rsvpOf(g.id, p.id) === 'in').map(p => p.id);
-  const batter = order.length ? order[(g.bi || 0) % order.length] : null, onDeck = order.length > 1 ? order[((g.bi || 0) + 1) % order.length] : null;
+  const batter = order.length ? batterAt(g.lineup, g.bi || 0, order) : null, onDeck = order.length > 1 ? batterAt(g.lineup, (g.bi || 0) + 1, order) : null;
   const final = g.status === 'final', keep = st.canEdit && !final;
   const cell = (arr, i) => arr && arr[i] != null ? arr[i] : '';
   const nowInn = g.inning || 1, innAbs = abs.filter(a => a.inn === nowInn);
@@ -475,6 +475,21 @@ function renderScore() {
   const scoredThisInn = new Set(innAbs.flatMap(a => a.scored || []));
   const onBase = [...new Set(innAbs.filter(a => ['1B', '2B', '3B', 'BB', 'E'].includes(a.r)).map(a => a.p).reverse())].filter(p => !scoredThisInn.has(p));
   const box = boxScore(abs);
+  // league-rule helpers: run limit, mercy, home-run limit, game clock, walk rule
+  const rules = RULES(), gOf = id => (st.players.find(p => p.id === id) || {}).g, nInn = st.team?.innings || 7;
+  const usInn = +((g.us || [])[nowInn - 1] || 0), lastInn = nowInn >= nInn, cap = rules.runCap && !lastInn ? rules.runCap : 0;
+  const capHit = cap && usInn >= cap;
+  const lead = sum(g.us) - sum(g.them), mercy = rules.mercy && nowInn > rules.mercy.after && Math.abs(lead) >= rules.mercy.lead;
+  const themHR = g.themHR || { m: 0, w: 0, t: 0 }, ourHR = abs.filter(a => a.r === 'HR');
+  const hrNote = (() => {
+    if (!rules.hr || !batter) return '';
+    if (rules.hr.byGender) { const bg = gOf(batter); if (bg !== 'm' && bg !== 'w') return ''; const us = ourHR.filter(a => gOf(a.p) === bg).length, them = themHR[bg] || 0;
+      return us - them >= rules.hr.plus ? `${bg === 'w' ? 'Women' : 'Men'}’s home runs are ${us}–${them}: one more by ${pName(batter)} is over the +${rules.hr.plus} limit${rules.hr.fencedOnly ? ' (fenced fields)' : ''}. Over the limit: ${rules.hr.over}.` : ''; }
+    const us = ourHR.length, them = themHR.t || 0;
+    return us - them >= rules.hr.plus ? `Home runs are ${us}–${them}: one more is over the +${rules.hr.plus} limit and counts as ${rules.hr.over}.` : '';
+  })();
+  const clock = gameClock(g.date, g.time, rules), hhmm = t => new Date(t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const twoBases = rules.walkOnDeck && onDeck && gOf(onDeck) === 'w';
   view.innerHTML = `<h2>${final ? 'Box score' : 'Keep score'}</h2>
   ${gamePicker(gid)}
   <div class="panel">
@@ -491,12 +506,24 @@ function renderScore() {
     <div class="row"><div class="grow"><div class="muted small">Inning ${esc(nowInn)} · <span class="outs" aria-label="${outs} out${outs === 1 ? '' : 's'}">${[0, 1, 2].map(i => `<span class="${i < outs ? 'on' : ''}"></span>`).join('')}</span> ${Math.min(outs, 3)} out${outs === 1 ? '' : 's'} · now batting</div><div class="atbat">${batter ? esc(pName(batter)) : 'No lineup'}</div>${onDeck ? `<div class="muted small">On deck: ${esc(pName(onDeck))}</div>` : ''}</div></div>
     ${batter ? `<div class="row"><span class="grow small"><b>Runs scored on this play</b></span><div class="stepper"><button class="iconbtn" type="button" id="rbiM" aria-label="One fewer run">−</button><output id="rbiV" aria-live="polite">${rbi}</output><button class="iconbtn" type="button" id="rbiP" aria-label="One more run">+</button></div></div>
     <div id="scorers"></div>
+    ${rules.coed || rules.runCap ? `<div class="rule-notes small">
+      ${clock ? `<span class="${clock.pastLastNew ? 'hot' : ''}">⏱ ${clock.pastLastNew ? `<b>Past ${esc(hhmm(clock.lastNew))}: don’t start a new inning</b>` : `No new inning after ${esc(hhmm(clock.lastNew))}`} · ends ${esc(hhmm(clock.end))}</span>` : ''}
+      ${cap ? `<span>Run limit ${cap} an inning: ${usInn}/${cap} this inning</span>` : rules.runCap ? '<span>Last inning: no run limit</span>' : ''}
+      ${rules.pitches ? `<span>${rules.pitches} pitches per batter</span>` : ''}
+      ${rules.offensePitcher && g.lineup && g.lineup.pitcher ? `<span>Pitching for us: <b>${esc(pName(g.lineup.pitcher))}</b></span>` : ''}
+      ${rules.hr ? `<span>HR ${rules.hr.byGender ? `men ${ourHR.filter(a => gOf(a.p) === 'm').length}–${themHR.m || 0}, women ${ourHR.filter(a => gOf(a.p) === 'w').length}–${themHR.w || 0}` : `${ourHR.length}–${themHR.t || 0}`} (+${rules.hr.plus} rule)</span>` : ''}
+    </div>` : ''}
+    ${capHit ? `<p class="notice small" style="margin:8px 0" role="alert"><b>${cap}-run limit reached.</b> The side is retired: tap <b>Next inning</b>.</p>` : ''}
+    ${mercy ? `<p class="notice small" style="margin:8px 0" role="alert"><b>Mercy rule:</b> a ${rules.mercy.lead}-run lead after the ${ordinal(rules.mercy.after)}${rules.mercy.optional ? '. The losing team can call the game or keep playing' : '. The game is over'}.</p>` : ''}
+    ${hrNote ? `<p class="notice small" style="margin:8px 0">${esc(hrNote)}</p>` : ''}
+    ${twoBases ? `<p class="muted small" style="margin:6px 0">Woman on deck: a walk is <b>2 bases</b> and she must bat.</p>` : ''}
     ${outs >= 3 ? `<p class="notice small" style="margin:8px 0">Three outs. Tap <b>Next inning</b> when the side is retired.</p>` : ''}
-    <div class="result-grid">${RESULTS.map(r => `<button type="button" class="${esc(r.cls || '')}" data-res="${esc(r.k)}">${r.label}</button>`).join('')}</div>` : `<p class="muted">Build a lineup first, or mark players In on the Games tab.</p>`}
+    <div class="result-grid">${RESULTS.map(r => `<button type="button" class="${esc(r.cls || '')}" data-res="${esc(r.k)}">${r.k === 'BB' && twoBases ? 'Walk (2 bases)' : r.label}</button>`).join('')}</div>` : `<p class="muted">Build a lineup first, or mark players In on the Games tab.</p>`}
     <div class="row">
       <button class="btn ghost small" type="button" id="themM" aria-label="Take a run off their score this inning">Them −1</button>
       <button class="btn ghost small" type="button" id="themP">Them +1 run</button>
-      <button class="btn ${outs >= 3 ? 'cta' : 'ghost'} small" type="button" id="nextInn">Next inning</button>
+      <button class="btn ${outs >= 3 || capHit ? 'cta' : 'ghost'} small" type="button" id="nextInn">Next inning</button>
+      ${rules.hr ? (rules.hr.byGender ? `<button class="btn ghost small" type="button" data-themhr="m">Their HR (man)</button><button class="btn ghost small" type="button" data-themhr="w">Their HR (woman)</button>` : `<button class="btn ghost small" type="button" data-themhr="t">Their HR</button>`) : ''}
       <button class="btn ghost small" type="button" id="undo" ${abs.length ? '' : 'disabled'}>Undo last at-bat</button>
       <button class="btn small" type="button" id="finish">Final</button>
     </div>
@@ -515,7 +542,8 @@ function renderScore() {
     box.innerHTML = `<fieldset class="scorers"><legend class="small"><b>Who scored?</b> <span class="muted">(pick ${rbi}, or skip)</span></legend><div class="row">${who.map(p => `<button type="button" class="chip-btn" data-scorer="${esc(p)}" aria-pressed="${scorers.includes(p)}">${esc(pName(p))}${p === batter ? ' (batter)' : ''}</button>`).join('') || '<span class="muted small">No one on base yet this inning.</span>'}</div></fieldset>`;
     box.querySelectorAll('[data-scorer]').forEach(b => b.onclick = () => { const p = b.dataset.scorer; scorers = scorers.includes(p) ? scorers.filter(x => x !== p) : scorers.length < rbi ? [...scorers, p] : [...scorers.slice(1), p]; drawScorers(); });
   };
-  const rb = v => { rbi = Math.max(0, Math.min(4, rbi + v)); document.getElementById('rbiV').textContent = rbi; drawScorers(); };
+  view.querySelectorAll('[data-themhr]').forEach(b => b.onclick = () => { const k = b.dataset.themhr, t = { m: 0, w: 0, t: 0, ...(g.themHR || {}) }; t[k]++; if (k !== 't') t.t++; write(() => db.doc('games/' + g.id).update({ themHR: t }), 'Their home run counted'); });
+  const rb = v => { rbi = Math.max(0, Math.min(cap ? Math.max(0, cap - usInn) : 4, rbi + v)); document.getElementById('rbiV').textContent = rbi; drawScorers(); };
   drawScorers();
   const m = document.getElementById('rbiM'); if (m) { m.onclick = () => rb(-1); document.getElementById('rbiP').onclick = () => rb(1); }
   view.querySelectorAll('[data-res]').forEach(b => b.addEventListener('click', async () => {
@@ -566,6 +594,13 @@ function renderStats() {
 }
 
 /* --- Team: roster and fees --- */
+function rulesCard() {
+  const r = RULES();
+  return `<details class="panel rules-card" id="rulesCard" style="margin-top:14px"><summary><b>League rules: ${esc(r.name)}</b></summary>
+    <ul>${r.summary.map(t => `<li>${esc(t)}</li>`).join('')}</ul>
+    ${r.source ? `<p class="muted small">Summarised from the league’s <a href="${esc(r.source)}" target="_blank" rel="noopener">official rules</a>. Rules change, so check there for the latest.${st.canEdit ? ' Captains can change the ruleset in Team settings below.' : ''}</p>` : st.canEdit ? '<p class="muted small">Pick OttawaSoftball or OSSC rules in Team settings below to have Dugout follow them.</p>' : ''}
+  </details>`;
+}
 function renderRoster() {
   const fee = st.team?.fee || 0, paid = st.players.filter(p => p.paid).length;
   view.innerHTML = `<h2>Roster</h2>
@@ -575,9 +610,10 @@ function renderRoster() {
     <div class="form-grid">
       <label for="pName">Name<input id="pName" type="text" required maxlength="40" placeholder="First name, last initial"></label>
       <label for="pNum">Jersey number<input id="pNum" type="text" inputmode="numeric" maxlength="3"></label>
+      <label for="pG">Plays as${RULES().coed ? '' : ' <span class="muted small">(for co-ed rules)</span>'}<select id="pG"><option value="">Not set</option><option value="w">Woman</option><option value="m">Man</option><option value="x">Non-binary</option></select></label>
     </div>
     <fieldset style="border:0;padding:0;margin:0"><legend style="font-weight:700;margin-bottom:6px">Positions they like</legend>
-      <div class="row">${POS.map(k => `<label style="display:flex;gap:6px;align-items:center;font-weight:400;min-height:44px;padding:0 6px;border:1.5px solid var(--line);border-radius:10px"><input type="checkbox" value="${esc(k)}" class="posbox"> ${k}</label>`).join('')}</div>
+      <div class="row">${RULES().prefPos.map(k => `<label style="display:flex;gap:6px;align-items:center;font-weight:400;min-height:44px;padding:0 6px;border:1.5px solid var(--line);border-radius:10px"><input type="checkbox" value="${esc(k)}" class="posbox"> ${k === 'P' && RULES().offensePitcher ? 'P (pitches for us)' : k}</label>`).join('')}</div>
     </fieldset>
     <input type="hidden" id="pId">
     <div class="row"><button class="btn" type="submit" id="pfSave">Add player</button><button class="btn ghost" type="button" id="pfCancel" hidden>Cancel</button></div>
@@ -586,12 +622,13 @@ function renderRoster() {
   ${(() => { const ng = nextGame(); if (!ng || !st.players.length) return ''; const c = { in: 0, maybe: 0, out: 0 }; st.players.forEach(p => { const v = rsvpOf(ng.id, p.id); if (c[v] !== undefined) c[v]++; });
     return `<div class="panel avail-head"><div class="grow"><b>Availability</b> for ${esc(gameWhen(ng))} ${ng.home ? 'vs' : '@'} ${esc(ng.opp)}<div class="muted small">${c.in} in · ${c.maybe} maybe · ${c.out} out · ${st.players.length - c.in - c.maybe - c.out} no reply. The lineup builder uses In first, then Maybe, and never Out.</div></div>${st.canEdit ? `<button class="btn ghost small" type="button" data-remind="${esc(ng.id)}">Remind team</button>` : ''}</div>`; })()}
   ${st.players.length ? st.players.map(p => `<div class="panel" style="padding:12px 16px"><div class="row">
-      <div class="grow"><b>${esc(p.name)}</b> <span class="muted">${esc(pNum(p.id))}</span><div class="muted small">${(p.pos || []).map(k => POS_NAME[k]).join(', ') || 'Any position'}</div></div>
+      <div class="grow"><b>${esc(p.name)}</b> <span class="muted">${esc(pNum(p.id))}</span>${p.g ? ` <span class="gtag">${esc(GENDER[p.g] || '')}</span>` : RULES().coed && st.canEdit ? ' <span class="gtag warn">Set Man/Woman</span>' : ''}<div class="muted small">${(p.pos || []).map(k => POS_NAME[k] || k).join(', ') || 'Any position'}</div></div>
       ${fee ? (st.canEdit ? `<button class="chip-btn" type="button" data-paid="${esc(p.id)}" aria-pressed="${esc(!!p.paid)}">${p.paid ? 'Paid' : 'Not paid'}</button>` : `<span class="pill ${p.paid ? 'in' : 'out'}">${p.paid ? 'Paid' : 'Not paid'}</span>`) : ''}
       ${nextGame() ? rsvpSeg(nextGame().id, p.id) : ''}
       ${st.canEdit ? `<button class="btn ghost small" type="button" data-edit="${esc(p.id)}">Edit</button><button class="btn danger small" type="button" data-del="${esc(p.id)}">Remove</button>` : ''}
     </div></div>`).join('') : `<div class="panel empty">No players yet.${st.canEdit ? ' Add your first one above.' : ''}</div>`}
   </div>
+  ${rulesCard()}
   ${st.canEdit ? `<h2>Team settings</h2>
   <form class="panel" id="tf">
     <div class="form-grid">
@@ -601,25 +638,29 @@ function renderRoster() {
       <label for="tFee">Player fee ($)<input id="tFee" type="number" min="0" value="${esc(st.team?.fee || 0)}"></label>
       <label for="tPlace">Home area, for game forecasts<input id="tPlace" type="text" maxlength="80" value="${esc(st.team?.place || '')}" placeholder="Postal code or neighbourhood"></label>
       <label for="tInn">Innings per game<input id="tInn" type="number" min="3" max="9" value="${esc(st.team?.innings || 7)}"></label>
+      <label for="tRules">League rules<select id="tRules">${Object.values(RULESETS).map(r => `<option value="${esc(r.id)}"${RULES().id === r.id ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}</select></label>
+      <label for="tDiv" id="tDivW"${RULES().id === 'ossc' ? '' : ' hidden'}>OSSC division<select id="tDiv"><option value="rec"${st.team?.division !== 'int' ? ' selected' : ''}>Recreational (+3 home runs)</option><option value="int"${st.team?.division === 'int' ? ' selected' : ''}>Intermediate (+5 home runs)</option></select></label>
     </div>
     <div class="row"><button class="btn" type="submit">Save settings</button></div>
     <p class="muted small">Players join with your invite link: open the team menu at the top and choose <b>Invite players</b>. Make someone a co-captain from the same menu so they can manage the lineup and keep score.</p>
   </form>` : ''}`;
   view.querySelectorAll('[data-rsvp]').forEach(b => b.addEventListener('click', () => setRsvp(b.dataset.g, b.dataset.p, b.dataset.v)));
   view.querySelectorAll('[data-remind]').forEach(b => b.addEventListener('click', () => shareSheet('Remind the team', reminderMessage(st.games.find(x => x.id === b.dataset.remind)))));
+  const tr = document.getElementById('tRules'); if (tr) tr.onchange = () => { document.getElementById('tDivW').hidden = tr.value !== 'ossc'; };
+  if (openRules) { openRules = false; const rc = document.getElementById('rulesCard'); if (rc) { rc.open = true; rc.scrollIntoView({ block: 'start' }); } }
   if (!st.canEdit) return;
   const form = document.getElementById('pf'), reset = () => { form.reset(); document.getElementById('pId').value = ''; document.getElementById('pfTitle').textContent = 'Add a player'; document.getElementById('pfSave').textContent = 'Add player'; document.getElementById('pfCancel').hidden = true; };
   form.addEventListener('submit', async e => {
     e.preventDefault();
     const name = document.getElementById('pName').value.trim(); if (!name) return;
     const id = document.getElementById('pId').value || uid(), prev = st.players.find(p => p.id === id);
-    const data = { name, number: document.getElementById('pNum').value.trim(), pos: [...form.querySelectorAll('.posbox:checked')].map(b => b.value), paid: prev ? !!prev.paid : false, order: prev ? prev.order : Date.now() };
+    const data = { name, number: document.getElementById('pNum').value.trim(), g: document.getElementById('pG').value, pos: [...form.querySelectorAll('.posbox:checked')].map(b => b.value), paid: prev ? !!prev.paid : false, order: prev ? prev.order : Date.now() };
     if (await write(() => db.doc('players/' + id).set(data), prev ? 'Player saved' : `${name} added`)) reset();
   });
   document.getElementById('pfCancel').onclick = reset;
   view.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => {
     const p = st.players.find(x => x.id === b.dataset.edit);
-    document.getElementById('pId').value = p.id; document.getElementById('pName').value = p.name; document.getElementById('pNum').value = p.number || '';
+    document.getElementById('pId').value = p.id; document.getElementById('pName').value = p.name; document.getElementById('pNum').value = p.number || ''; document.getElementById('pG').value = p.g || '';
     form.querySelectorAll('.posbox').forEach(c => c.checked = (p.pos || []).includes(c.value));
     document.getElementById('pfTitle').textContent = 'Edit ' + p.name; document.getElementById('pfSave').textContent = 'Save player'; document.getElementById('pfCancel').hidden = false;
     document.getElementById('pName').focus(); form.scrollIntoView({ block: 'start' });
@@ -628,8 +669,9 @@ function renderRoster() {
   view.querySelectorAll('[data-paid]').forEach(b => b.addEventListener('click', () => { const p = st.players.find(x => x.id === b.dataset.paid); write(() => db.doc('players/' + p.id).update({ paid: !p.paid }), `${p.name}: ${p.paid ? 'not paid' : 'paid'}`); }));
   document.getElementById('tf').addEventListener('submit', e => { e.preventDefault();
     const place = document.getElementById('tPlace').value.trim();
-    const save = loc => write(() => db.doc('team/info').update({ name: document.getElementById('tName').value.trim() || st.team.name, league: document.getElementById('tLeague').value.trim(), season: document.getElementById('tSeason').value.trim(), fee: +document.getElementById('tFee').value || 0, innings: +document.getElementById('tInn').value || 7,
-      ...(loc ? { place: loc.label, lat: loc.lat, lng: loc.lng } : place ? {} : { place: '', lat: null, lng: null }) }), loc ? `Settings saved. Forecasts use ${loc.label}.` : 'Settings saved');
+    const ruleId = document.getElementById('tRules').value, ruleChanged = ruleId !== RULES().id;
+    const save = loc => write(() => db.doc('team/info').update({ rules: ruleId, division: document.getElementById('tDiv').value, ...(ruleId !== 'standard' ? { innings: 7 } : {}), name: document.getElementById('tName').value.trim() || st.team.name, league: document.getElementById('tLeague').value.trim(), season: document.getElementById('tSeason').value.trim(), fee: +document.getElementById('tFee').value || 0, innings: +document.getElementById('tInn').value || 7,
+      ...(loc ? { place: loc.label, lat: loc.lat, lng: loc.lng } : place ? {} : { place: '', lat: null, lng: null }) }), loc ? `Settings saved. Forecasts use ${loc.label}.` : ruleChanged ? `Now using ${RULESETS[ruleId].short} rules. Rebuild upcoming lineups.` : 'Settings saved');
     if (place && place !== st.team?.place) locate(place).then(save, () => { toast('Couldn’t find that area. Try a postal code.'); save(null); });
     else save(null); });
 }

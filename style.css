@@ -321,3 +321,11 @@ a.btn { display: inline-flex; align-items: center; justify-content: center; text
 .notice-toggle { border: 0; padding: 4px 0; }
 .avail-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; }
 .avail-head .grow { flex: 1; min-width: 14em; }
+
+/* ---------- league rules ---------- */
+.gtag { display: inline-block; font: 700 11px/1 var(--font-body); padding: 3px 6px; border-radius: 6px; background: var(--bg); color: var(--muted); border: 1px solid var(--line); vertical-align: middle; }
+.gtag.warn { background: var(--maybe-bg); color: var(--maybe); border-color: transparent; }
+.rule-notes { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); margin: 8px 0 2px; }
+.rule-notes .hot { color: var(--out); }
+.rules-card summary { cursor: pointer; min-height: 32px; }
+.rules-card ul { margin: 10px 0; padding-left: 20px; display: grid; gap: 6px; }

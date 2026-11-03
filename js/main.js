@@ -118,6 +118,9 @@ async function teamsScreen(session, note = '', teams) {
     <div class="row"><button class="btn" type="submit">Join</button></div><p class="small err" id="jMsg" role="status"></p></form>
   <form class="panel" id="newF"><h2>Start a team</h2><p class="muted">You’ll be the captain. Invite players after.</p>
     <label for="tn">Team name<input id="tn" type="text" maxlength="40" required></label>
+    <label for="tr">League rules<select id="tr"><option value="standard">Standard slo-pitch</option><option value="ottawasoftball">OttawaSoftball (co-ed)</option><option value="ossc">OSSC: Ottawa Sport &amp; Social Club (mixed)</option></select></label>
+    <label for="td" id="tdW" hidden>OSSC division<select id="td"><option value="rec">Recreational</option><option value="int">Intermediate</option></select></label>
+    <p class="muted small" style="margin-top:-4px">Dugout builds lineups and keeps score by these rules. You can change it later.</p>
     <div class="row"><button class="btn cta" type="submit">Create team</button></div><p class="small err" id="nMsg" role="status"></p></form>
   <p class="small muted">Signed in as ${esc(session.user.email)}. <button class="chip-btn" type="button" id="so">Sign out</button></p>`);
   gate.querySelectorAll('[data-team]').forEach(b => b.onclick = () => openTeam(session, teams.find(t => t.id === b.dataset.team), teams));
@@ -129,10 +132,13 @@ async function teamsScreen(session, note = '', teams) {
     if (error) { document.getElementById('jMsg').textContent = friendly(error, 'Couldn’t join. Try again.'); return; }
     LS.set('team', data); afterSignIn(session);
   };
+  document.getElementById('tr').onchange = e => { document.getElementById('tdW').hidden = e.target.value !== 'ossc'; };
   document.getElementById('newF').onsubmit = async e => {
     e.preventDefault(); const name = document.getElementById('tn').value.trim(); e.submitter.disabled = true;
     const { data, error } = await sb.rpc('create_team', { team_name: name });
     if (error) { e.submitter.disabled = false; document.getElementById('nMsg').textContent = friendly(error, 'Couldn’t create the team. Try again.'); return; }
+    const rules = document.getElementById('tr').value;
+    if (rules !== 'standard') await sb.rpc('doc_update', { p_scope: data, p_col: 'team', p_id: 'info', patch: { rules, division: document.getElementById('td').value } });
     LS.set('team', data); afterSignIn(session);
   };
 }

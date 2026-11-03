@@ -23,6 +23,14 @@ You need Postgres 15 or newer on your machine. Point the script at a **throwaway
 PGPORT=5432 PGUSER=postgres ./tests/database/run.sh
 ```
 
+## League rules (`tests/rules.test.mjs`)
+
+About 75 checks of the lineup builder against each league's rules, using realistic team mixes: full teams, short-handed teams, too many men, non-binary players and players with no gender set.
+
+```
+node tests/rules.test.mjs
+```
+
 ## Click-through test (`tests/e2e`)
 
 Signs in, creates a team, invites a player, RSVPs, posts, signs up a sub, sends and accepts a request, and deletes an account. It runs in a real browser (Playwright), against an in-browser stand-in for Supabase. It also fails if the Content Security Policy blocks anything.
