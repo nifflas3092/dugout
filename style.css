@@ -292,3 +292,32 @@ nav.tabs a[aria-current="page"] { color: var(--grass); box-shadow: inset 0 3px 0
 .share-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
 .share-grid .cta { grid-column: 1 / -1; }
 dialog.menu textarea { width: 100%; }
+
+/* ---------- gameday ---------- */
+.gameday { border: 2px solid var(--grass); margin-bottom: 16px; }
+.gd-tag { flex: 1; font: 800 14px/1 var(--font-display); letter-spacing: .1em; text-transform: uppercase; color: var(--grass); }
+.gd-more { color: var(--grass); font-weight: 700; }
+.gd-time { font: 800 calc(var(--base) * 3)/1 var(--font-display); margin-top: 6px; }
+.gd-sub { color: var(--muted); font-weight: 700; margin: 2px 0 10px; }
+.gd-field { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--bg); border-radius: 10px; font-size: 1.1em; }
+.gd-you { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--in-bg); }
+.gd-order { list-style: none; padding: 0; margin: 10px 0; display: grid; gap: 2px; }
+.gd-order li { display: flex; align-items: center; gap: 10px; padding: 6px 4px; border-top: 1px solid var(--line); }
+.gd-order li.me { background: var(--in-bg); border-radius: 8px; }
+.gd-order .n { font: 800 18px/1 var(--font-display); color: var(--grass); width: 22px; text-align: right; }
+.gd-order .pos { font-weight: 700; min-width: 44px; text-align: center; border-radius: 6px; padding: 2px 6px; background: var(--in-bg); color: var(--in); }
+.gd-order .pos.bench { background: var(--bg); color: var(--muted); }
+a.btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+
+/* ---------- team notice banner ---------- */
+.notice-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 14px; border-radius: 12px; margin: 0 0 14px; }
+.notice-bar .grow { flex: 1; min-width: 14em; }
+.notice-meta { display: block; font-size: .8em; opacity: .85; margin-top: 2px; }
+.notice-danger { background: #dc2626; color: #fff; }
+.notice-warn { background: var(--gold); color: var(--gold-ink); }
+.notice-info { background: var(--in-bg); color: var(--in); }
+.notice-bar.small { padding: 4px 10px; }
+.notice-btn, .notice-toggle { border: 1.5px solid currentColor; background: transparent; color: inherit; border-radius: 999px; padding: 6px 12px; min-height: 36px; font: 700 .85em var(--font-body); cursor: pointer; }
+.notice-toggle { border: 0; padding: 4px 0; }
+.avail-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; }
+.avail-head .grow { flex: 1; min-width: 14em; }

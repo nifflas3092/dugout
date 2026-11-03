@@ -130,6 +130,34 @@ async def main():
     await cap.screenshot(path=OUT+'v4_score.png', full_page=True)
     await cap.goto('http://localhost:8766/#stats'); await cap.wait_for_timeout(400)
     check('season stats include runs scored', 'R' in [h.strip() for h in await cap.locator('thead th').all_inner_texts()])
+    # ---- roster availability feeds the lineup builder
+    await cap.goto('http://localhost:8766/#roster'); await cap.wait_for_selector('.avail-head')
+    check('roster shows availability for the next game', 'Availability' in await cap.inner_text('.avail-head'))
+    await cap.locator('.panel:has(b:text-is("Pat")) [data-rsvp][data-v=out]').click(); await cap.wait_for_timeout(500)
+    await cap.goto('http://localhost:8766/#lineup'); await cap.wait_for_selector('#build'); await cap.click('#build'); await cap.wait_for_timeout(700)
+    names=await cap.evaluate("[...document.querySelectorAll('ol.panel li b')].map(b=>b.innerText)")
+    check('player marked Out on the roster is left out of the lineup', names and 'Pat' not in names and 'Jordan' in names)
+    await cap.click('#shareLu'); t=await cap.input_value('#share textarea')
+    check('lineup as group-chat text', 'BATTING ORDER' in t and '1. ' in t); await cap.click('#share [data-x]')
+    async with cap.expect_download() as dl: await cap.click('#imgLu')
+    d=await dl.value; p=await d.path(); import os as _os
+    check('lineup saved as a PNG image', d.suggested_filename.endswith('.png') and _os.path.getsize(p) > 5000)
+    _os.replace(p, OUT+'v5_lineup.png')
+    # ---- gameday view
+    await pl.goto('http://localhost:8766/#gameday'); await pl.wait_for_selector('.gameday'); await pl.wait_for_timeout(400)
+    t=await pl.inner_text('.gameday'); href=await pl.get_attribute('.gd-field a','href')
+    check('gameday shows time, your batting spot and directions', '6:30' in t and 'You bat' in t and href and 'google.com/maps' in href)
+    await pl.screenshot(path=OUT+'v5_gameday.png', full_page=True)
+    # ---- team notice banner
+    await cap.goto('http://localhost:8766/#schedule'); await cap.wait_for_selector('#postNotice'); await cap.click('#postNotice'); await cap.click('[data-preset="0"]')
+    await cap.click('#nf button[type=submit]'); await cap.wait_for_timeout(500); await cap.click('#share [data-x]')
+    await pl.wait_for_timeout(700)
+    check('players see a red notice at the top', await pl.locator('#notice.notice-danger').count()==1 and 'CANCELLED' in await pl.inner_text('#notice'))
+    await pl.screenshot(path=OUT+'v5_notice.png')
+    await pl.click('[data-nhide]'); check('players can tuck the notice away', await pl.locator('#notice.small [data-nshow]').count()==1)
+    await cap.click('[data-nclear]'); await cap.wait_for_timeout(700); await pl.wait_for_timeout(500)
+    check('captain removes it for everyone', await pl.locator('#notice').is_hidden())
+    await pl.goto('http://localhost:8766/#schedule'); await pl.wait_for_timeout(500)
     check('players see the rain-out but get no captain buttons', 'Rained out' in await pl.inner_text('#view') and await pl.locator('[data-makeup], [data-unrain], [data-rain]').count()==0)
 
     # ---- gear marketplace

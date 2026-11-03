@@ -24,7 +24,7 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 const pName = id => { const p = st.players.find(x => x.id === id); return p ? p.name : 'Former player'; };
 const pNum = id => { const p = st.players.find(x => x.id === id); return p && p.number !== '' && p.number != null ? '#' + p.number : ''; };
 const sortedGames = () => [...st.games].sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || '')));
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };  // the local date
 const fmtDate = d => { if (!d) return { m: '', d: '', w: '' }; const x = new Date(d + 'T12:00:00'); return { m: x.toLocaleString(undefined, { month: 'short' }), d: x.getDate(), w: x.toLocaleString(undefined, { weekday: 'short' }) }; };
 const fmtTime = t => { if (!t) return ''; const [h, m] = t.split(':').map(Number); return new Date(2000, 0, 1, h, m).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); };
 const sum = a => (a || []).reduce((s, v) => s + (+v || 0), 0);
@@ -48,7 +48,7 @@ function render() {
   if (tab === 'gear' && (st.loaded.team || st.offline)) return renderGear(gearCtx());
   if (!st.team && !st.offline) return renderSetup();
   if (st.offline && !st.team) return renderOffline();
-  ({ subs: renderSubs, schedule: renderSchedule, lineup: renderLineup, score: renderScore, stats: renderStats, roster: renderRoster, board: renderBoard }[tab] || renderSchedule)();
+  ({ gameday: renderGameday, subs: renderSubs, schedule: renderSchedule, lineup: renderLineup, score: renderScore, stats: renderStats, roster: renderRoster, board: renderBoard }[tab] || renderSchedule)();
 }
 function header() {
   const t = st.team;
@@ -58,6 +58,7 @@ function header() {
   const fin = st.games.filter(g => g.status === 'final');
   const w = fin.filter(g => sum(g.us) > sum(g.them)).length, l = fin.filter(g => sum(g.us) < sum(g.them)).length, tie = fin.length - w - l;
   document.getElementById('record').textContent = fin.length ? `${w}-${l}${tie ? '-' + tie : ''}` : '';
+  renderNotice();
   const badge = document.getElementById('gearBadge'), n = myId ? unreadCount(st, myId) : 0;
   if (badge) { badge.textContent = n; badge.hidden = !n; badge.setAttribute('aria-label', `${n} unread`); }
 }
@@ -90,14 +91,142 @@ function renderSetup() {
 }
 
 /* --- Games --- */
+/* ---------- Gameday: the three things you need walking in from the parking lot ---------- */
+const nextGame = () => sortedGames().find(g => g.status !== 'final' && g.status !== 'rainout' && g.date >= today());
+const posAt = (L, i, pid) => (L && L.field[i] ? POS.find(k => L.field[i][k] === pid) : null) || 'BN';
+const ordinal = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 > 10 && n % 100 < 14) ? 0 : n % 10] || 'th');
+function mapsUrl(g) {
+  const lat = g.lat ?? null, lng = g.lng ?? null;
+  const q = lat != null && lng != null && !g.field ? `${lat},${lng}` : [g.field, (st.diamonds.find(d => d.id === g.diamond) || {}).label || st.team?.place].filter(Boolean).join(', ');
+  return q ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q) : null;
+}
+function untilText(g) {
+  const ms = new Date(`${g.date}T${g.time || '18:30'}`).getTime() - Date.now();
+  if (ms < -2 * 3600e3) return ''; if (ms < 0) return 'Game on now';
+  const h = Math.floor(ms / 3600e3), m = Math.round((ms % 3600e3) / 60e3);
+  return h >= 24 ? `in ${Math.round(h / 24)} day${Math.round(h / 24) === 1 ? '' : 's'}` : `starts in ${h ? h + ' h ' : ''}${m} min`;
+}
+function gamedayCard(g, full) {
+  const L = g.lineup, wx = gameWeather(g), maps = mapsUrl(g), isToday = g.date === today();
+  const mySpot = me && L ? L.order.indexOf(me) : -1, myPos = me && L ? posAt(L, 0, me) : null;
+  const pitcher = L && L.field[0] && L.field[0].P;
+  return `<section class="panel gameday" aria-label="Gameday">
+    <div class="row" style="align-items:flex-start"><span class="gd-tag">${isToday ? 'Gameday' : 'Next game · ' + esc(fmtDate(g.date).w + ' ' + fmtDate(g.date).m + ' ' + fmtDate(g.date).d)}</span>${full ? '' : `<a class="small gd-more" href="#gameday">Open gameday view →</a>`}</div>
+    <div class="gd-time">${esc(fmtTime(g.time) || 'Time TBA')}</div>
+    <div class="gd-sub">${esc(untilText(g))}${untilText(g) ? ' · ' : ''}${g.home ? 'vs' : '@'} ${esc(g.opp)}</div>
+    <div class="gd-field"><span aria-hidden="true">📍</span><span class="grow"><b>${esc(g.field || 'Field not set')}</b>${(st.diamonds.find(d => d.id === g.diamond) || {}).name ? `<span class="muted small" style="display:block">${esc(st.diamonds.find(d => d.id === g.diamond).name)}</span>` : ''}</span>
+      ${maps ? `<a class="btn cta small" href="${esc(maps)}" target="_blank" rel="noopener">Directions</a>` : ''}</div>
+    ${wx ? `<div class="wx wx-${wx.level}"><span class="wx-icon" aria-hidden="true">${wx.icon}</span><span class="grow"><b>${esc(wx.temp)}°C</b> · ${esc(wx.text)}</span></div>` : ''}
+    ${me ? (mySpot >= 0 ? `<div class="gd-you">You bat <b>${ordinal(mySpot + 1)}</b> · ${myPos === 'BN' ? 'start on the <b>bench</b>' : `start at <b>${esc(POS_NAME[myPos])}</b>`}</div>`
+      : `<div class="gd-you"><span class="grow">Are you playing?</span>${rsvpSeg(g.id, me)}</div>`) : ''}
+    ${L ? `${pitcher ? `<div class="small" style="margin-top:8px">Pitching: <b>${esc(pName(pitcher))}</b></div>` : ''}
+      <ol class="gd-order">${L.order.map((p, i) => `<li${p === me ? ' class="me"' : ''}><span class="n">${i + 1}</span><span class="grow">${esc(pName(p))}</span><span class="pos${posAt(L, 0, p) === 'BN' ? ' bench' : ''}">${esc(posAt(L, 0, p))}</span></li>`).join('')}</ol>
+      <div class="row">${full ? `<button class="btn ghost small" type="button" data-sharelu="${esc(g.id)}">Share lineup</button>` : ''}<a class="btn ghost small" href="#lineup" data-golu="${esc(g.id)}">Full lineup by inning</a></div>`
+      : `<p class="muted small" style="margin-top:8px">${st.canEdit ? 'No lineup yet. Build it on the Lineup tab.' : 'The lineup isn’t posted yet.'}</p>`}
+  </section>`;
+}
+function renderGameday() {
+  const g = nextGame();
+  view.innerHTML = `<h2>Gameday</h2>${g ? gamedayCard(g, true) : '<div class="panel empty">No upcoming games.</div>'}`;
+  bindGameday();
+}
+function bindGameday() {
+  view.querySelectorAll('[data-sharelu]').forEach(b => b.onclick = () => shareSheet('Share the lineup', lineupText(st.games.find(x => x.id === b.dataset.sharelu))));
+  view.querySelectorAll('[data-golu]').forEach(a => a.addEventListener('click', () => { selGame = a.dataset.golu; LS.set('game', selGame); }));
+  view.querySelectorAll('.gameday [data-rsvp]').forEach(b => b.addEventListener('click', () => setRsvp(b.dataset.g, b.dataset.p, b.dataset.v)));
+}
+
+/* ---------- 3. the lineup as a group-chat message, or as a picture ---------- */
+function lineupText(g) {
+  const L = g.lineup; if (!L) return '';
+  const pad = (t, n) => (t + ' '.repeat(n)).slice(0, n);
+  return `⚾ ${st.team?.name || 'Lineup'}: ${gameWhen(g)} ${g.home ? 'vs' : '@'} ${g.opp}${g.field ? ' (' + g.field + ')' : ''}\n\n` +
+    `BATTING ORDER · position each inning\n` +
+    L.order.map((p, i) => `${i + 1}. ${pName(p)}: ${L.field.map((_, k) => posAt(L, k, p)).join(' ')}`).join('\n') +
+    `\n\nBN = bench that inning. Full lineup in Dugout:`;
+}
+async function lineupImage(g) {
+  const L = g.lineup, n = L.order.length, inn = L.field.length;
+  const W = 1080, rowH = 66, top = 250, H = top + n * rowH + 110, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const x = cv.getContext('2d'), disp = '"Barlow Condensed", "Arial Narrow", Arial, sans-serif', body = '"Atkinson Hyperlegible", Arial, sans-serif';
+  try { await document.fonts.ready; } catch (_) {}
+  x.fillStyle = '#f8fafc'; x.fillRect(0, 0, W, H);
+  x.fillStyle = '#3b8256'; x.fillRect(0, 0, W, 190);
+  x.fillStyle = '#ffffff'; x.font = `800 64px ${disp}`; x.fillText((st.team?.name || 'Lineup').toUpperCase().slice(0, 28), 48, 92);
+  x.font = `400 30px ${body}`; x.fillText(`${gameWhen(g)} · ${g.home ? 'vs' : '@'} ${g.opp}${g.field ? ' · ' + g.field : ''}`.slice(0, 70), 48, 146);
+  const nameW = 330, colW = Math.min(76, (W - 48 - 70 - nameW - 48) / inn), x0 = 48 + 70 + nameW;
+  x.fillStyle = '#475569'; x.font = `700 22px ${body}`;
+  for (let k = 0; k < inn; k++) { x.textAlign = 'center'; x.fillText(`INN ${k + 1}`, x0 + colW * k + colW / 2, top - 22); }
+  x.textAlign = 'left';
+  L.order.forEach((p, i) => {
+    const y = top + i * rowH;
+    x.fillStyle = i % 2 ? '#f8fafc' : '#ffffff'; x.fillRect(32, y, W - 64, rowH);
+    x.fillStyle = '#3b8256'; x.font = `800 34px ${disp}`; x.fillText(String(i + 1), 52, y + 44);
+    x.fillStyle = '#0f172a'; x.font = `700 30px ${body}`; x.fillText(pName(p).slice(0, 20), 118, y + 43);
+    for (let k = 0; k < inn; k++) {
+      const pos = posAt(L, k, p), cx = x0 + colW * k + colW / 2;
+      x.fillStyle = pos === 'BN' ? '#e2e8f0' : pos === 'P' ? '#f59e0b' : '#e8f3ec'; x.beginPath(); x.roundRect(cx - colW / 2 + 5, y + 12, colW - 10, rowH - 24, 8); x.fill();
+      x.fillStyle = pos === 'BN' ? '#64748b' : '#0f172a'; x.font = `700 24px ${body}`; x.textAlign = 'center'; x.fillText(pos, cx, y + 42); x.textAlign = 'left';
+    }
+  });
+  x.fillStyle = '#475569'; x.font = `400 24px ${body}`; x.fillText('BN = bench that inning · P (gold) = pitching · made with Dugout', 48, H - 44);
+  return new Promise(r => cv.toBlob(r, 'image/png'));
+}
+async function saveLineupImage(g) {
+  const blob = await lineupImage(g), name = `lineup-${g.date}.png`, file = new File([blob], name, { type: 'image/png' });
+  try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: 'Lineup' }); return; } } catch (e) { if (e && e.name === 'AbortError') return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  toast('Lineup image saved');
+}
+
+/* ---------- 4. team notice banner (fields closed, time changed, ...) ---------- */
+const NOTICE_PRESETS = [['danger', '⚠️ GAMES CANCELLED TONIGHT: fields are closed'], ['warn', '🌧️ Fields being checked. Decision by 5 PM, watch for an update'], ['warn', '⏰ Game time changed. Check the schedule'], ['info', '📍 Diamond changed. Check the schedule']];
+const liveNotice = () => { const a = st.team && st.team.alert; return a && a.text && (!a.until || Date.now() < a.until) ? a : null; };
+function renderNotice() {
+  const box = document.getElementById('notice'); if (!box) return;
+  const a = liveNotice();
+  if (!a) { box.innerHTML = ''; box.hidden = true; return; }
+  const hidden = LS.get('noticeHidden', 0) === a.at;
+  box.hidden = false; box.className = `notice-bar notice-${['danger', 'warn', 'info'].includes(a.level) ? a.level : 'warn'}${hidden ? ' small' : ''}`;
+  box.innerHTML = hidden ? `<button type="button" class="notice-toggle" data-nshow>Team notice · show</button>`
+    : `<div class="grow" role="alert"><b>${esc(a.text)}</b><span class="notice-meta">Posted ${esc(new Date(a.at).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }))}${a.until ? ' · clears automatically tonight' : ''}</span></div>
+      <div class="row" style="gap:6px">${st.canEdit ? `<button type="button" class="notice-btn" data-nshare>Send to chat</button><button type="button" class="notice-btn" data-nclear>Remove</button>` : ''}<button type="button" class="notice-btn" data-nhide aria-label="Hide this notice">Hide</button></div>`;
+  const on = (sel, fn) => { const b = box.querySelector(sel); if (b) b.onclick = fn; };
+  on('[data-nshow]', () => { LS.set('noticeHidden', 0); renderNotice(); });
+  on('[data-nhide]', () => { LS.set('noticeHidden', a.at); renderNotice(); });
+  on('[data-nclear]', () => write(() => db.doc('team/info').update({ alert: null }), 'Notice removed'));
+  on('[data-nshare]', () => shareSheet('Send the notice to your team', `${st.team?.name || 'Team'}: ${a.text}`));
+}
+function noticeForm() {
+  const box = document.getElementById('gameForm');
+  box.innerHTML = `<form class="panel" id="nf" style="margin-top:12px"><h3>Post a team notice</h3>
+    <p class="muted small" style="margin-top:-4px">Shows at the top of Dugout for everyone on the team.</p>
+    <div class="row">${NOTICE_PRESETS.map(([lv, t], i) => `<button type="button" class="chip-btn" data-preset="${i}">${esc(t.split(':')[0].split('.')[0])}</button>`).join('')}</div>
+    <label for="nText">Message<input id="nText" type="text" maxlength="140" required placeholder="e.g. Rain delay. Games start 30 minutes late"></label>
+    <div class="form-grid">
+      <label for="nLevel">How urgent<select id="nLevel"><option value="danger">Red: cancelled or closed</option><option value="warn" selected>Orange: heads-up</option><option value="info">Green: good to know</option></select></label>
+      <label for="nUntil">Show until<select id="nUntil"><option value="today">The end of today</option><option value="">I remove it</option></select></label>
+    </div>
+    <div class="row"><button class="btn cta" type="submit">Post notice</button><button class="btn ghost" type="button" id="nCancel">Cancel</button></div></form>`;
+  box.querySelectorAll('[data-preset]').forEach(b => b.onclick = () => { const [lv, t] = NOTICE_PRESETS[+b.dataset.preset]; box.querySelector('#nText').value = t; box.querySelector('#nLevel').value = lv; });
+  box.querySelector('#nCancel').onclick = () => box.innerHTML = '';
+  box.querySelector('#nf').addEventListener('submit', async e => {
+    e.preventDefault(); const text = box.querySelector('#nText').value.trim(); if (!text) return;
+    const end = new Date(); end.setHours(23, 59, 59, 999);
+    const alert = { text, level: box.querySelector('#nLevel').value, at: Date.now(), until: box.querySelector('#nUntil').value === 'today' ? end.getTime() : null };
+    if (await write(() => db.doc('team/info').update({ alert }), 'Notice posted')) { box.innerHTML = ''; shareSheet('Also send it to your team chat?', `${st.team?.name || 'Team'}: ${text}`); }
+  });
+}
+
 function renderSchedule() {
   const games = sortedGames(), rained = games.filter(g => g.status === 'rainout'), up = games.filter(g => g.status !== 'final' && g.status !== 'rainout' && g.date >= today()), past = games.filter(g => !up.includes(g) && g.status !== 'rainout');
   const needMakeup = rained.filter(g => !g.makeup);
   const mine = me && st.players.find(p => p.id === me);
   view.innerHTML = `
   <div class="row" style="margin-top:12px"><div class="grow small muted">${mine ? `You're <b>${esc(mine.name)}</b> <button class="btn ghost small" id="notMe" type="button">Change</button>` : st.players.length ? `Open <b>Show everyone</b> and tap <b>This is me</b> next to your name so you can answer for yourself.` : ''}</div>
-  ${st.canEdit ? `<button class="btn cta" id="addGame" type="button">Add game</button>` : ''}</div>
+  ${st.canEdit ? `<button class="btn ghost" id="postNotice" type="button">Post notice</button><button class="btn cta" id="addGame" type="button">Add game</button>` : ''}</div>
   <div id="gameForm"></div>
+  ${up[0] && up[0].date === today() ? gamedayCard(up[0], false) : ''}
   <h2>Coming up</h2>
   <div class="stack games">${up.length ? up.map(gameCard).join('') : `<div class="panel empty">No games scheduled.${st.canEdit ? ' Tap <b>Add game</b> to put one on the schedule.' : ''}</div>`}</div>
   ${rained.length ? `<h2>Rained out</h2><p class="muted small" style="margin-top:-6px">${rained.length} this season${needMakeup.length ? ` · <b style="color:var(--out)">${needMakeup.length} still need${needMakeup.length === 1 ? 's' : ''} a makeup date</b>` : ' · all made up'}</p><div class="stack games">${[...needMakeup, ...rained.filter(g => g.makeup)].map(gameCard).join('')}</div>` : ''}
@@ -111,7 +240,9 @@ function renderSchedule() {
   view.querySelectorAll('[data-remind]').forEach(b => b.addEventListener('click', () => shareSheet('Remind the team', reminderMessage(st.games.find(x => x.id === b.dataset.remind)))));
   view.querySelectorAll('[data-unrain]').forEach(b => b.addEventListener('click', () => write(() => db.doc('games/' + b.dataset.unrain).update({ status: 'scheduled' }), 'Back on the schedule')));
   view.querySelectorAll('[data-makeup]').forEach(b => b.addEventListener('click', () => { gameForm(null, st.games.find(g => g.id === b.dataset.makeup)); document.getElementById('gameForm').scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
-  view.querySelectorAll('[data-rsvp]').forEach(b => b.addEventListener('click', () => setRsvp(b.dataset.g, b.dataset.p, b.dataset.v)));
+  view.querySelectorAll('.game [data-rsvp], .rsvp-list [data-rsvp]').forEach(b => b.addEventListener('click', () => setRsvp(b.dataset.g, b.dataset.p, b.dataset.v)));
+  bindGameday();
+  const pn = document.getElementById('postNotice'); if (pn) pn.onclick = () => noticeForm();
   view.querySelectorAll('[data-me]').forEach(b => b.addEventListener('click', () => write(() => platform.claimPlayer(b.dataset.me), 'Got it. You can answer for yourself now.')));
   view.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { const el = document.getElementById('rs-' + b.dataset.open); el.hidden = !el.hidden; if (el.hidden) openLists.delete(b.dataset.open); else openLists.add(b.dataset.open); b.setAttribute('aria-expanded', !el.hidden); b.textContent = el.hidden ? 'Show everyone' : 'Hide list'; }));
   view.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => { selGame = b.dataset.g; LS.set('game', selGame); location.hash = '#' + b.dataset.go; }));
@@ -151,6 +282,7 @@ function gameCard(g) {
       ${players.map(p => `<div class="rsvp-row${p.id === me ? ' me' : ''}"><span class="who">${esc(p.name)} <span class="muted">${esc(pNum(p.id))}</span></span>${rsvpSeg(g.id, p.id)}${!me && !p.uid ? `<button class="btn ghost small" type="button" data-me="${esc(p.id)}">This is me</button>` : ''}</div>`).join('') || '<p class="muted">Add players on the Team tab first.</p>'}
     </div>`}
     <div class="row">
+      ${!final && nextGame() && nextGame().id === g.id && g.date !== today() ? `<a class="btn ghost small" href="#gameday">Gameday view</a>` : ''}
       <button class="btn ghost small" type="button" data-go="lineup" data-g="${esc(g.id)}">Lineup</button>
       <button class="btn ghost small" type="button" data-go="score" data-g="${esc(g.id)}">${final ? 'Box score' : 'Keep score'}</button>
       ${st.canEdit && !final ? `<button class="btn ghost small" type="button" data-remind="${esc(g.id)}">Remind team</button>` : ''}
@@ -291,6 +423,7 @@ function renderLineup() {
   ${!L ? `<div class="panel"><p>No lineup yet for this game.</p>${st.canEdit ? `<p class="muted small">Build one from everyone who said <b>In</b>. Batting order moves down a spot each game, and bench innings are shared out evenly. Players get their listed positions first.</p><div class="row"><button class="btn cta" id="build" type="button">Build fair lineup</button></div>` : '<p class="muted small">The captain will post it before the game.</p>'}</div>` : `
   <div class="row"><div class="grow muted small">${L.order.length} players · ${innings} innings${L.order.length > 10 ? ` · each player sits about ${Math.round((L.order.length - 10) * innings / L.order.length * 10) / 10} innings` : ''}</div>
   ${st.canEdit ? `<button class="btn ghost small" id="rebuild" type="button">Rebuild</button><button class="btn danger small" id="clearL" type="button">Clear</button>` : ''}</div>
+  <div class="row" style="margin-top:6px"><button class="btn cta small" id="shareLu" type="button">Send to team chat</button><button class="btn ghost small" id="imgLu" type="button">Save as image</button></div>
   <h3 style="margin-top:8px">Batting order</h3>
   <ol class="panel" style="list-style:none;padding:8px 16px;margin:0;gap:0">${L.order.map((id, i) => `<li class="row" style="padding:6px 0;border-top:${i ? '1px solid var(--line)' : '0'}"><span class="order-num">${i + 1}</span><span class="grow"><b>${esc(pName(id))}</b> <span class="muted">${esc(pNum(id))}</span></span>${st.canEdit ? `<button class="iconbtn" type="button" data-up="${esc(i)}" aria-label="Move ${esc(pName(id))} up" ${i ? '' : 'disabled'}>↑</button><button class="iconbtn" type="button" data-down="${esc(i)}" aria-label="Move ${esc(pName(id))} down" ${i < L.order.length - 1 ? '' : 'disabled'}>↓</button>` : ''}</li>`).join('')}</ol>
   <h3 style="margin-top:18px">Positions by inning</h3>
@@ -301,6 +434,8 @@ function renderLineup() {
   </table></div>
   ${L.field.some(inn => POS.some(k => !inn[k])) ? `<p class="notice small" style="margin-top:10px">Some innings have open positions. With fewer than 10 players, play three outfielders.</p>` : ''}`}`;
   bindPicker();
+  const sl = document.getElementById('shareLu'); if (sl) sl.onclick = () => shareSheet('Send the lineup to your team', lineupText(g));
+  const il = document.getElementById('imgLu'); if (il) il.onclick = () => saveLineupImage(g).catch(() => toast('Couldn’t make the image'));
   const b = document.getElementById('build') || document.getElementById('rebuild');
   if (b) b.addEventListener('click', () => { const nl = buildLineup(g); if (!nl) { toast('Nobody is marked In or Maybe yet'); return; } write(() => db.doc('games/' + g.id).update({ lineup: nl }), 'Lineup built'); });
   const c = document.getElementById('clearL'); if (c) c.addEventListener('click', () => confirmInline(c, 'Clear this lineup?', () => write(() => db.doc('games/' + g.id).update({ lineup: null }), 'Lineup cleared')));
@@ -448,9 +583,12 @@ function renderRoster() {
     <div class="row"><button class="btn" type="submit" id="pfSave">Add player</button><button class="btn ghost" type="button" id="pfCancel" hidden>Cancel</button></div>
   </form>` : ''}
   <div class="stack" style="margin-top:12px">
+  ${(() => { const ng = nextGame(); if (!ng || !st.players.length) return ''; const c = { in: 0, maybe: 0, out: 0 }; st.players.forEach(p => { const v = rsvpOf(ng.id, p.id); if (c[v] !== undefined) c[v]++; });
+    return `<div class="panel avail-head"><div class="grow"><b>Availability</b> for ${esc(gameWhen(ng))} ${ng.home ? 'vs' : '@'} ${esc(ng.opp)}<div class="muted small">${c.in} in · ${c.maybe} maybe · ${c.out} out · ${st.players.length - c.in - c.maybe - c.out} no reply. The lineup builder uses In first, then Maybe, and never Out.</div></div>${st.canEdit ? `<button class="btn ghost small" type="button" data-remind="${esc(ng.id)}">Remind team</button>` : ''}</div>`; })()}
   ${st.players.length ? st.players.map(p => `<div class="panel" style="padding:12px 16px"><div class="row">
       <div class="grow"><b>${esc(p.name)}</b> <span class="muted">${esc(pNum(p.id))}</span><div class="muted small">${(p.pos || []).map(k => POS_NAME[k]).join(', ') || 'Any position'}</div></div>
       ${fee ? (st.canEdit ? `<button class="chip-btn" type="button" data-paid="${esc(p.id)}" aria-pressed="${esc(!!p.paid)}">${p.paid ? 'Paid' : 'Not paid'}</button>` : `<span class="pill ${p.paid ? 'in' : 'out'}">${p.paid ? 'Paid' : 'Not paid'}</span>`) : ''}
+      ${nextGame() ? rsvpSeg(nextGame().id, p.id) : ''}
       ${st.canEdit ? `<button class="btn ghost small" type="button" data-edit="${esc(p.id)}">Edit</button><button class="btn danger small" type="button" data-del="${esc(p.id)}">Remove</button>` : ''}
     </div></div>`).join('') : `<div class="panel empty">No players yet.${st.canEdit ? ' Add your first one above.' : ''}</div>`}
   </div>
@@ -467,6 +605,8 @@ function renderRoster() {
     <div class="row"><button class="btn" type="submit">Save settings</button></div>
     <p class="muted small">Players join with your invite link: open the team menu at the top and choose <b>Invite players</b>. Make someone a co-captain from the same menu so they can manage the lineup and keep score.</p>
   </form>` : ''}`;
+  view.querySelectorAll('[data-rsvp]').forEach(b => b.addEventListener('click', () => setRsvp(b.dataset.g, b.dataset.p, b.dataset.v)));
+  view.querySelectorAll('[data-remind]').forEach(b => b.addEventListener('click', () => shareSheet('Remind the team', reminderMessage(st.games.find(x => x.id === b.dataset.remind)))));
   if (!st.canEdit) return;
   const form = document.getElementById('pf'), reset = () => { form.reset(); document.getElementById('pId').value = ''; document.getElementById('pfTitle').textContent = 'Add a player'; document.getElementById('pfSave').textContent = 'Add player'; document.getElementById('pfCancel').hidden = true; };
   form.addEventListener('submit', async e => {

@@ -8,6 +8,9 @@ Team app for rec league slowpitch:
 - a team board
 - a league-wide sub finder with distance search
 - **game-day weather**: each upcoming game shows the forecast for its park and flags likely rain-outs, and the schedule tracks rained-out games until a makeup is scheduled
+- **Gameday view**: game time, the field with one-tap directions, the forecast, your batting spot and starting position, who's pitching and the starting lineup
+- **Team notice banner**: captains post a red or orange notice ("Games cancelled tonight: fields closed") at the top of everyone's app, optionally clearing itself at midnight
+- **Lineup sharing**: send the batting order and positions by inning to the team chat as text, or save it as an image
 - **Team messages**: one tap sends an RSVP reminder (with who hasn't answered), a rain-out notice or a makeup date to your team's WhatsApp or text group
 - **Scorekeeping**: outs per inning, who scored on each play, a per-game box score (AB, R, H, RBI, BB, HR) and season stats including runs
 - **Gear**: a used-equipment marketplace with photos, filters, and private messages between buyer and seller
