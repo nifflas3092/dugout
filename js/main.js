@@ -47,7 +47,7 @@ function signInScreen() {
     <p class="muted">We’ll email you a sign-in link. No password to remember.</p>
     <label for="em">Email<input id="em" type="email" autocomplete="email" required maxlength="254"></label>
     <label for="nm">Your name <span class="muted small">(what teammates see)</span><input id="nm" type="text" maxlength="40" autocomplete="name"></label>
-    <div class="row"><button class="btn" type="submit">Email me a sign-in link</button></div>
+    <div class="row"><button class="btn cta" type="submit">Email me a sign-in link</button></div>
     <p class="small" id="msg" role="status"></p>
     <p class="small muted" style="margin:0">By signing in you agree to how we handle your information in our <a href="privacy.html">privacy policy</a>.</p>
   </form>
@@ -118,7 +118,7 @@ async function teamsScreen(session, note = '', teams) {
     <div class="row"><button class="btn" type="submit">Join</button></div><p class="small err" id="jMsg" role="status"></p></form>
   <form class="panel" id="newF"><h2>Start a team</h2><p class="muted">You’ll be the captain. Invite players after.</p>
     <label for="tn">Team name<input id="tn" type="text" maxlength="40" required></label>
-    <div class="row"><button class="btn" type="submit">Create team</button></div><p class="small err" id="nMsg" role="status"></p></form>
+    <div class="row"><button class="btn cta" type="submit">Create team</button></div><p class="small err" id="nMsg" role="status"></p></form>
   <p class="small muted">Signed in as ${esc(session.user.email)}. <button class="chip-btn" type="button" id="so">Sign out</button></p>`);
   gate.querySelectorAll('[data-team]').forEach(b => b.onclick = () => openTeam(session, teams.find(t => t.id === b.dataset.team), teams));
   document.getElementById('so').onclick = () => sb.auth.signOut();

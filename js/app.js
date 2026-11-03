@@ -78,7 +78,7 @@ function renderSetup() {
       <label for="sFee">Player fee for the season ($)<input id="sFee" type="number" min="0" step="1" placeholder="e.g. 60"></label>
       <label for="sInn">Innings per game<input id="sInn" type="number" min="3" max="9" value="7"></label>
     </div>
-    <div class="row"><button class="btn" type="submit">Create team</button><button class="btn ghost" type="button" id="demo">Try it with a sample team</button></div>
+    <div class="row"><button class="btn cta" type="submit">Create team</button><button class="btn ghost" type="button" id="demo">Try it with a sample team</button></div>
   </form>`;
   document.getElementById('setup').addEventListener('submit', async e => {
     e.preventDefault();
@@ -96,7 +96,7 @@ function renderSchedule() {
   const mine = me && st.players.find(p => p.id === me);
   view.innerHTML = `
   <div class="row" style="margin-top:12px"><div class="grow small muted">${mine ? `You're <b>${esc(mine.name)}</b> <button class="btn ghost small" id="notMe" type="button">Change</button>` : st.players.length ? `Open <b>Show everyone</b> and tap <b>This is me</b> next to your name so you can answer for yourself.` : ''}</div>
-  ${st.canEdit ? `<button class="btn" id="addGame" type="button">Add game</button>` : ''}</div>
+  ${st.canEdit ? `<button class="btn cta" id="addGame" type="button">Add game</button>` : ''}</div>
   <div id="gameForm"></div>
   <h2>Coming up</h2>
   <div class="stack games">${up.length ? up.map(gameCard).join('') : `<div class="panel empty">No games scheduled.${st.canEdit ? ' Tap <b>Add game</b> to put one on the schedule.' : ''}</div>`}</div>
@@ -248,7 +248,7 @@ function renderLineup() {
   const L = g.lineup, innings = L ? L.field.length : (st.team?.innings || 7);
   view.innerHTML = `<h2>Lineup</h2>
   ${gamePicker(gid)}
-  ${!L ? `<div class="panel"><p>No lineup yet for this game.</p>${st.canEdit ? `<p class="muted small">Build one from everyone who said <b>In</b>. Batting order moves down a spot each game, and bench innings are shared out evenly. Players get their listed positions first.</p><div class="row"><button class="btn" id="build" type="button">Build fair lineup</button></div>` : '<p class="muted small">The captain will post it before the game.</p>'}</div>` : `
+  ${!L ? `<div class="panel"><p>No lineup yet for this game.</p>${st.canEdit ? `<p class="muted small">Build one from everyone who said <b>In</b>. Batting order moves down a spot each game, and bench innings are shared out evenly. Players get their listed positions first.</p><div class="row"><button class="btn cta" id="build" type="button">Build fair lineup</button></div>` : '<p class="muted small">The captain will post it before the game.</p>'}</div>` : `
   <div class="row"><div class="grow muted small">${L.order.length} players · ${innings} innings${L.order.length > 10 ? ` · each player sits about ${Math.round((L.order.length - 10) * innings / L.order.length * 10) / 10} innings` : ''}</div>
   ${st.canEdit ? `<button class="btn ghost small" id="rebuild" type="button">Rebuild</button><button class="btn danger small" id="clearL" type="button">Clear</button>` : ''}</div>
   <h3 style="margin-top:8px">Batting order</h3>
@@ -509,7 +509,7 @@ function renderMySub() {
     <p class="muted small" id="aLocNote">${a.lat != null ? `Located near <b>${esc(a.area)}</b>. Only an area about 1 km wide is stored, never your address.` : 'Only a rough area (about 1 km) is stored, never your address.'}</p>
     <label for="aContact">How captains can reach you<input id="aContact" type="text" maxlength="80" value="${esc(st.contacts[myId] || '')}" placeholder="e.g. text 416-555-0142, or @jordanplays"></label>
     <p class="muted small" style="margin-top:-6px">Private. A captain sees this only after you say yes to their request.</p>
-    <div class="row"><button class="btn" type="submit" id="aSave">${st.agents.some(x => x.id === myId) ? 'Save profile' : 'Join the sub list'}</button>
+    <div class="row"><button class="btn cta" type="submit" id="aSave">${st.agents.some(x => x.id === myId) ? 'Save profile' : 'Join the sub list'}</button>
     ${st.agents.some(x => x.id === myId) ? `<button class="btn danger" type="button" id="aDel">Remove my profile</button>` : ''}</div>
   </form>`;
   box.querySelectorAll('[data-inv]').forEach(b => b.addEventListener('click', () => write(() => db.doc('invites/' + b.dataset.inv).update({ status: b.dataset.s, answeredAt: Date.now() }), b.dataset.s === 'accepted' ? 'Told the captain you’re in' : 'Told the captain you can’t make it')));

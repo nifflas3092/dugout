@@ -165,7 +165,7 @@ function sell(c) {
       ${kept.length + added.length < MAX_PHOTOS ? `<label class="btn ghost" style="display:inline-flex;align-items:center;cursor:pointer">Add photos<input id="sph" type="file" accept="image/*" multiple style="position:absolute;width:1px;height:1px;opacity:0"></label>` : ''}</div>
       <p class="muted small">Photos are resized and their hidden location data is removed before upload.</p>
     </fieldset>
-    <div class="row"><button class="btn" type="submit" id="ssave">${l ? 'Save changes' : 'Post listing'}</button>${l ? '<button class="btn ghost" type="button" id="scancel">Cancel</button>' : ''}</div>
+    <div class="row"><button class="btn cta" type="submit" id="ssave">${l ? 'Save changes' : 'Post listing'}</button>${l ? '<button class="btn ghost" type="button" id="scancel">Cancel</button>' : ''}</div>
     <p class="small muted">By posting you confirm the item is yours to sell and isn’t stolen, recalled or unsafe.</p>
   </form>`;
     // keep what was typed when the photo row redraws the form

@@ -1,31 +1,35 @@
 /* Layout: a phone-first team app; one column of content, a fixed tab bar at the bottom like a dugout lineup card. */
 :root {
-  --bg: #f3f5f1;          /* infield-chalk white with a hint of grass */
-  --surface: #ffffff;
-  --ink: #142118;         /* near-black green */
-  --muted: #4d5c52;
-  --line: #d3dbd3;
-  --grass: #1f6b3a;       /* accent */
+  /* Fresh Field & Turf: off-white base (60%), clover green (30%), ochre gold accent (10%), graphite text */
+  --bg: #f8fafc;          /* pure off-white: the page */
+  --surface: #ffffff;     /* cards sit a touch brighter than the page */
+  --ink: #0f172a;         /* deep forest graphite: text and icons */
+  --muted: #475569;
+  --line: #e2e8f0;
+  --grass: #3b8256;       /* soft meadow / clover green: header, active tabs, scorecards */
   --grass-ink: #ffffff;
-  --clay: #b5542a;        /* secondary, used sparingly */
-  --in: #1f7a3f; --in-bg: #e2f2e7;
-  --maybe: #8a6100; --maybe-bg: #fbf0d4;
-  --out: #a3302a; --out-bg: #f8e1df;
-  --focus: #1b5fd1;
+  --grass-deep: #2f6b46;  /* pressed and hover states */
+  --gold: #f59e0b;        /* warm ochre: standout buttons, badges, warnings */
+  --gold-ink: #0f172a;    /* text on gold */
+  --clay: #b45309;        /* gold when it has to be readable as text on white */
+  --in: #2f6b46; --in-bg: #e8f3ec;
+  --maybe: #92400e; --maybe-bg: #fef3c7;
+  --out: #b91c1c; --out-bg: #fee2e2;
+  --focus: #2563eb;
   --font-display: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
   --font-body: "Atkinson Hyperlegible", "Segoe UI", system-ui, -apple-system, sans-serif;
   --base: 17px;
   --tabh: 68px;
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --bg: #0f1612; --surface: #17211b; --ink: #eef3ee; --muted: #a9b8ad; --line: #2c3a31;
-  --grass: #4fbf75; --grass-ink: #08140c; --clay: #e08356;
-  --in: #6fd394; --in-bg: #173323; --maybe: #f0c35a; --maybe-bg: #33290f; --out: #f08a82; --out-bg: #3a1a18; --focus: #7aa7ff;
+  --bg: #0b1220; --surface: #131c2e; --ink: #f1f5f9; --muted: #94a3b8; --line: #26324a;
+  --grass: #3b8256; --grass-ink: #ffffff; --grass-deep: #2f6b46; --gold: #fbbf24; --gold-ink: #0f172a; --clay: #fbbf24;
+  --in: #7dd3a0; --in-bg: #163024; --maybe: #fcd34d; --maybe-bg: #3a2a08; --out: #fca5a5; --out-bg: #3b1414; --focus: #93c5fd;
   color-scheme: dark } }
 :root[data-theme="dark"] {
-  --bg: #0f1612; --surface: #17211b; --ink: #eef3ee; --muted: #a9b8ad; --line: #2c3a31;
-  --grass: #4fbf75; --grass-ink: #08140c; --clay: #e08356;
-  --in: #6fd394; --in-bg: #173323; --maybe: #f0c35a; --maybe-bg: #33290f; --out: #f08a82; --out-bg: #3a1a18; --focus: #7aa7ff;
+  --bg: #0b1220; --surface: #131c2e; --ink: #f1f5f9; --muted: #94a3b8; --line: #26324a;
+  --grass: #3b8256; --grass-ink: #ffffff; --grass-deep: #2f6b46; --gold: #fbbf24; --gold-ink: #0f172a; --clay: #fbbf24;
+  --in: #7dd3a0; --in-bg: #163024; --maybe: #fcd34d; --maybe-bg: #3a2a08; --out: #fca5a5; --out-bg: #3b1414; --focus: #93c5fd;
   color-scheme: dark }
 html.big { --base: 20px; }
 html, body { background: var(--bg); color: var(--ink); }
@@ -80,7 +84,7 @@ textarea { min-height: 88px; resize: vertical; }
 .pill.in { background: var(--in-bg); color: var(--in); }
 .pill.maybe { background: var(--maybe-bg); color: var(--maybe); }
 .pill.out { background: var(--out-bg); color: var(--out); }
-.pill.warn { background: var(--out-bg); color: var(--out); }
+.pill.warn { background: var(--maybe-bg); color: var(--maybe); }
 .pill.final { background: var(--grass); color: var(--grass-ink); }
 
 .rsvp-list { display: grid; gap: 6px; }
@@ -131,7 +135,7 @@ nav.tabs a svg { width: 24px; height: 24px; }
 nav.tabs a[aria-current="page"] { color: var(--grass); }
 nav.tabs a[aria-current="page"] svg { stroke-width: 2.4; }
 
-.notice { border-left: 4px solid var(--clay); background: var(--surface); padding: 10px 14px; border-radius: 0 10px 10px 0; }
+.notice { border-left: 4px solid var(--gold); background: var(--surface); padding: 10px 14px; border-radius: 0 10px 10px 0; }
 .empty { text-align: center; padding: 28px 12px; color: var(--muted); }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .chipset { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -241,3 +245,40 @@ nav.tabs a { position: relative; }
 .bubble { max-width: 80%; padding: 8px 12px; border-radius: 14px 14px 14px 4px; background: var(--bg); align-self: flex-start; overflow-wrap: anywhere; }
 .bubble.mine { align-self: flex-end; background: var(--in-bg); border-radius: 14px 14px 4px 14px; }
 .bubble .small { font-size: .75em; margin-top: 2px; }
+
+/* ---------- Fresh Field & Turf: where the green and gold go ---------- */
+/* the team header is a full-width clover band */
+header.top { background: var(--grass); color: var(--grass-ink); box-shadow: 0 0 0 100vmax var(--grass); clip-path: inset(0 -100vmax); padding-block: 14px; margin-bottom: 14px; }
+header.top .teamname p { color: rgb(255 255 255 / .82); }
+header.top .crest { background: var(--grass-ink); color: var(--grass); }
+header.top .record { color: var(--gold); }
+header.top .chip-btn { background: rgb(255 255 255 / .12); border-color: rgb(255 255 255 / .35); color: #fff; }
+header.top .chip-btn:hover { background: rgb(255 255 255 / .2); }
+header.top .chip-btn[aria-pressed="true"] { background: #fff; color: var(--grass); border-color: #fff; }
+header.top :focus-visible { outline-color: var(--gold); }
+/* phone tab bar: white, with the active tab in green and a green marker */
+nav.tabs a[aria-current="page"] { color: var(--grass); box-shadow: inset 0 3px 0 var(--grass); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) nav.tabs a[aria-current="page"] { color: #7dd3a0; box-shadow: inset 0 3px 0 #7dd3a0; } }
+/* desktop: the sidebar carries the green */
+@media (min-width: 900px) {
+  nav.tabs { background: var(--grass); border-right: 0; }
+  nav.tabs a { color: rgb(255 255 255 / .82); }
+  nav.tabs a:hover { background: rgb(255 255 255 / .12); color: #fff; }
+  nav.tabs a[aria-current="page"], :root nav.tabs a[aria-current="page"] { background: #fff; color: var(--grass); box-shadow: none; }
+  nav.tabs :focus-visible { outline-color: var(--gold); }
+}
+/* scorecards */
+.scoreboard { background: var(--grass); color: var(--grass-ink); border-radius: 12px; padding: 14px 18px; }
+.linescore thead th { background: var(--grass); color: var(--grass-ink); }
+.linescore thead th:first-child { border-radius: 8px 0 0 0; } .linescore thead th:last-child { border-radius: 0 8px 0 0; }
+/* buttons: green by default, gold for the one thing you most likely want to do next */
+.btn:hover:not(:disabled) { background: var(--grass-deep); }
+.btn.ghost:hover:not(:disabled) { background: var(--bg); border-color: var(--grass); }
+.btn.danger:hover:not(:disabled) { background: var(--out-bg); }
+.btn.cta { background: var(--gold); color: var(--gold-ink); }
+.btn.cta:hover:not(:disabled) { background: #d97706; }
+.badge { background: var(--gold); color: var(--gold-ink); }
+.datebox .m { color: var(--grass); }
+.gear-price { color: var(--grass); }
+:root[data-theme="dark"] .gear-price, :root[data-theme="dark"] .datebox .m { color: #7dd3a0; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .gear-price, :root:not([data-theme="light"]) .datebox .m { color: #7dd3a0; } }
