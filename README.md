@@ -7,6 +7,8 @@ Team app for rec league slowpitch:
 - live scoring and season stats
 - a team board
 - a league-wide sub finder with distance search
+- **game-day weather**: each upcoming game shows the forecast for its park and flags likely rain-outs, and the schedule tracks rained-out games until a makeup is scheduled
+- **Gear**: a used-equipment marketplace with photos, filters, and private messages between buyer and seller
 
 It's a plain website with no build step. People open it in a browser or add it to their home screen, where it works like an installed app. Data lives in [Supabase](https://supabase.com), a hosted Postgres database with sign-in. Hosting is free on Vercel or Netlify.
 
@@ -45,6 +47,13 @@ It's a plain website with no build step. People open it in a browser or add it t
 3. Every push to GitHub now redeploys the site automatically.
 4. The security headers in `vercel.json` are applied for you. Netlify works the same way using `netlify.toml`.
 
+### 3b. Turn on game forecasts
+
+1. On the **Team** tab, under Team settings, enter your **home area** (a postal code is best).
+2. When you add a game, you can also pick a specific park from the sub finder's diamonds.
+
+Forecasts come from MET Norway and cover about the next 9 days. They're free to use commercially as long as the "Forecast from MET Norway" credit stays on the page.
+
 ### 4. Try it
 
 1. Open your site on your phone and sign in with the emailed code.
@@ -71,6 +80,9 @@ It's a plain website with no build step. People open it in a browser or add it t
 | See the sub list | | ✓ | ✓ | ✓ |
 | See a sub's contact details | | | | After they say yes |
 | Ask a sub to play | | | | ✓ |
+| Mark a game rained out, schedule the makeup | | | | ✓ |
+| Browse, list and sell gear | | ✓ | ✓ | ✓ |
+| Read a gear conversation | | Only the buyer and seller | | |
 
 The database enforces all of this, not just the app. See [SECURITY.md](SECURITY.md).
 
@@ -81,6 +93,8 @@ The database enforces all of this, not just the app. See [SECURITY.md](SECURITY.
 | `index.html`, `style.css` | The page and its look (light and dark, phone and desktop) |
 | `js/main.js` | Sign-in with an emailed code, joining or starting a team, the team menu, deleting an account |
 | `js/app.js` | The team app: games, lineup, scoring, stats, roster, subs, board |
+| `js/weather.js` | Game-time forecasts from MET Norway and the rain-out risk rules |
+| `js/market.js` | The Gear marketplace: browse, sell, photos, messages |
 | `js/platform.js` | Connects the app to Supabase (reads, writes, live updates) and place lookup |
 | `supabase/schema.sql` | Tables, security rules, validation, and the actions the app calls |
 | `tests/` | About 90 attacks on the database rules, plus a click-through browser test. See `tests/README.md` |
@@ -91,6 +105,8 @@ The database enforces all of this, not just the app. See [SECURITY.md](SECURITY.
 
 - Text-message reminders for RSVPs and sub requests (Twilio)
 - Payments for player fees and a paid captain plan (Stripe)
+- Gear: featured listings for a small fee, or a shop page for local stores (a natural way for the marketplace to earn)
+- Text or push alerts when a game's forecast turns bad, or when a captain marks a rain-out
 - App Store and Google Play versions (wrap the site with Capacitor)
 - League admin view across teams: standings and a shared schedule
 - Error monitoring (for example Sentry's free tier), so you hear about problems before captains do

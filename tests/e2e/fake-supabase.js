@@ -19,6 +19,10 @@ function canWriteDoc(d, r, old) {
     return false;
   }
   if (r.col === 'agents' || r.col === 'contacts') return r.id === ME().id;
+  if (r.col === 'listings') return !old || old.owner === ME().id;
+  if (r.col === 'threads') return !old && r.id.endsWith('_' + ME().id);
+  if (r.col === 'messages') { const t = d.docs.find(x => x.col === 'threads' && x.id === r.data.thread); return !old && t && (t.data.buyer === ME().id || t.data.seller === ME().id); }
+  if (r.col === 'reports') return !old;
   if (r.col === 'diamonds') return old ? old.owner === ME().id : d.team_members.some(m => m.user_id === ME().id && m.role === 'captain');
   if (r.col === 'invites') return old ? (old.owner === ME().id || old.data.agent === ME().id) : d.team_members.some(m => m.user_id === ME().id && m.role === 'captain');
   return false;
@@ -27,6 +31,9 @@ function canRead(d, table, r) {
   if (table === 'docs') {
     if (r.col === 'contacts') return r.id === ME().id || d.docs.some(i => i.col === 'invites' && i.owner === ME().id && i.data.agent === r.id && i.data.status === 'accepted');
     if (r.col === 'invites') return r.owner === ME().id || r.data.agent === ME().id;
+    if (r.col === 'threads') return r.data.buyer === ME().id || r.data.seller === ME().id;
+    if (r.col === 'messages') { const t = d.docs.find(x => x.col === 'threads' && x.id === r.data.thread); return t && (t.data.buyer === ME().id || t.data.seller === ME().id); }
+    if (r.col === 'reports') return false;
     return r.scope === 'global' || isMember(d, r.scope);
   }
   if (table === 'teams') return isMember(d, r.id);
@@ -58,8 +65,11 @@ class Q {
       if (this.t === 'docs') { if (!canWriteDoc(d, r, old)) return denied(); r.owner = old ? old.owner : ME().id;
         if (r.col === 'players' && old) r.data = { ...r.data, uid: old.data.uid }; if (r.col === 'players' && !old) delete r.data.uid;
         if (r.col === 'posts') r.data.u = r.owner;
+        if (r.col === 'listings') r.data.seller = r.owner;
+        if (r.col === 'threads' && !old) { const l = d.docs.find(x => x.col === 'listings' && x.id === r.data.listing); if (!l || l.owner === ME().id) return { data: null, error: { code: 'P0001', message: 'That’s your own listing' } }; r.data = { listing: l.id, buyer: ME().id, seller: l.owner, title: l.data.title, at: Date.now() }; }
+        if (r.col === 'messages') { r.data = { thread: r.data.thread, text: r.data.text, from: ME().id, at: Date.now() }; const t = d.docs.find(x => x.col === 'threads' && x.id === r.data.thread); Object.assign(t.data, { last: r.data.text, lastAt: r.data.at, lastFrom: ME().id, [t.data.buyer === ME().id ? 'seenBuyer' : 'seenSeller']: r.data.at }); }
         if (r.col === 'invites' && !old) { if (!isCap(d, r.data.teamId)) return { data: null, error: { code: 'P0001', message: 'You can only ask on behalf of a team you captain' } }; r.data.team = d.teams.find(t => t.id === r.data.teamId).name; r.data.status = 'pending'; } }
-      if (old) Object.assign(old, r); else rows.push(r); save(d); return { data: null, error: null };
+      if (old) Object.assign(old, r); else rows.push(r); save(d); return { data: this.single ? { data: r.data } : null, error: null };
     }
     const targets = rows.filter(hit);
     if (this.t === 'docs' && targets.some(r => !(canWriteDoc(d, r, r) || (this.op === 'delete' && r.col === 'posts' && r.owner === ME().id)))) return denied();
@@ -87,8 +97,15 @@ function createClient() {
       if (name === 'claim_player' || name === 'unclaim_player') { const p = d.docs.find(x => x.scope === a.p_team && x.col === 'players' && x.id === a.p_player); if (!p) return { error: { code: 'P0001', message: 'No such player' } }; if (name === 'claim_player') { if (p.data.uid && p.data.uid !== ME().id) return { error: { code: 'P0001', message: 'Someone else already picked that name. Ask your captain.' } }; d.docs.filter(x => x.scope === a.p_team && x.col === 'players' && x.data.uid === ME().id).forEach(x => delete x.data.uid); p.data.uid = ME().id; } else delete p.data.uid; save(d); return { data: null, error: null }; }
       if (name === 'reset_join_code') { const t = d.teams.find(t => t.id === a.p_team); t.join_code = rid() + 'XY'; save(d); return { data: t.join_code, error: null }; }
       if (name === 'delete_my_account') { const me = ME().id; d.docs = d.docs.filter(x => !(x.owner === me && (x.scope === 'global' || x.col === 'posts')) && !(x.id === me)); d.team_members = d.team_members.filter(m => m.user_id !== me); d.profiles = d.profiles.filter(p => p.id !== me); save(d); window.__fakeUser = null; sessionStorage.removeItem('fakeUser'); return { data: null, error: null }; }
+      if (name === 'mark_thread_seen') { const t = d.docs.find(x => x.col === 'threads' && x.id === a.p_thread); t.data[t.data.buyer === ME().id ? 'seenBuyer' : 'seenSeller'] = Date.now(); save(d); return { data: null, error: null }; }
       if (name === 'doc_update') { const r = d.docs.find(x => x.scope === a.p_scope && x.col === a.p_col && x.id === a.p_id); if (!r || !canWriteDoc(d, r, r)) return { data: null, error: { message: 'Not found or not allowed' } }; Object.assign(r.data, a.patch); save(d); return { data: null, error: null }; }
     },
+    storage: { from: () => ({
+      async upload(path, blob) { if (!path.startsWith(ME().id + '/')) return { error: { message: 'new row violates row-level security policy' } }; const url = await new Promise(r => { const f = new FileReader(); f.onload = () => r(f.result); f.readAsDataURL(blob); }); const m = JSON.parse(localStorage.getItem('fake-photos') || '{}'); m[path] = url; localStorage.setItem('fake-photos', JSON.stringify(m)); return { error: null }; },
+      getPublicUrl(path) { return { data: { publicUrl: JSON.parse(localStorage.getItem('fake-photos') || '{}')[path] || 'data:,' } }; },
+      async remove(paths) { const m = JSON.parse(localStorage.getItem('fake-photos') || '{}'); paths.forEach(p => delete m[p]); localStorage.setItem('fake-photos', JSON.stringify(m)); return { error: null }; },
+      async list() { return { data: [], error: null }; },
+    }) },
     channel() {
       let fn; let snap = JSON.stringify(load().docs);
       const ch = { on(_, __, f) { fn = f; return ch; }, subscribe(cb) { cb && setTimeout(() => cb('SUBSCRIBED'), 0); return ch; } };

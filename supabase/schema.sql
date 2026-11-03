@@ -56,8 +56,8 @@ create table if not exists public.docs (
   updated_at timestamptz not null default now(),
   primary key (scope, col, id),
   constraint docs_id_format check (id ~ '^[A-Za-z0-9_-]{1,80}$'),
-  constraint docs_col_known check (col in ('team', 'players', 'games', 'rsvp', 'ab', 'posts', 'agents', 'contacts', 'diamonds', 'invites')),
-  constraint docs_scope_matches check ((scope = 'global') = (col in ('agents', 'contacts', 'diamonds', 'invites'))),
+  constraint docs_col_known check (col in ('team', 'players', 'games', 'rsvp', 'ab', 'posts', 'agents', 'contacts', 'diamonds', 'invites', 'listings', 'threads', 'messages', 'reports')),
+  constraint docs_scope_matches check ((scope = 'global') = (col in ('agents', 'contacts', 'diamonds', 'invites', 'listings', 'threads', 'messages', 'reports'))),
   constraint docs_is_object check (jsonb_typeof(data) = 'object'),
   constraint docs_size check (pg_column_size(data) <= 32768)
 );
@@ -70,12 +70,16 @@ drop function if exists public.touch_doc() cascade;
 do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'docs_id_format') then
     alter table public.docs add constraint docs_id_format check (id ~ '^[A-Za-z0-9_-]{1,80}$') not valid,
-      add constraint docs_col_known check (col in ('team', 'players', 'games', 'rsvp', 'ab', 'posts', 'agents', 'contacts', 'diamonds', 'invites')) not valid,
-      add constraint docs_scope_matches check ((scope = 'global') = (col in ('agents', 'contacts', 'diamonds', 'invites'))) not valid,
+      add constraint docs_col_known check (col in ('team', 'players', 'games', 'rsvp', 'ab', 'posts', 'agents', 'contacts', 'diamonds', 'invites', 'listings', 'threads', 'messages', 'reports')) not valid,
+      add constraint docs_scope_matches check ((scope = 'global') = (col in ('agents', 'contacts', 'diamonds', 'invites', 'listings', 'threads', 'messages', 'reports'))) not valid,
       add constraint docs_is_object check (jsonb_typeof(data) = 'object') not valid,
       add constraint docs_size check (pg_column_size(data) <= 32768) not valid;
   end if;
 end $$;
+-- the lists of collections grow as features are added: rebuild those two checks every run
+alter table public.docs drop constraint if exists docs_col_known, drop constraint if exists docs_scope_matches;
+alter table public.docs add constraint docs_col_known check (col in ('team', 'players', 'games', 'rsvp', 'ab', 'posts', 'agents', 'contacts', 'diamonds', 'invites', 'listings', 'threads', 'messages', 'reports')),
+  add constraint docs_scope_matches check ((scope = 'global') = (col in ('agents', 'contacts', 'diamonds', 'invites', 'listings', 'threads', 'messages', 'reports')));
 -- move any contact details out of sub profiles into the private contacts collection
 insert into public.docs (scope, col, id, data, owner)
   select 'global', 'contacts', id, jsonb_build_object('contact', data->>'contact'), owner from public.docs
@@ -137,6 +141,12 @@ create or replace function public.owns_player(t text, player text) returns boole
 language sql stable security definer set search_path = '' as $$
   select exists (select 1 from public.docs d where d.scope = t and d.col = 'players' and d.id = player
                  and d.data->>'uid' = (select auth.uid())::text);
+$$;
+-- marketplace: is the current user the buyer or seller in this conversation?
+create or replace function public.in_thread(t text) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.docs d where d.scope = 'global' and d.col = 'threads' and d.id = t
+                 and (d.data->>'buyer' = (select auth.uid())::text or d.data->>'seller' = (select auth.uid())::text));
 $$;
 create or replace function public.new_join_code() returns text
 language sql volatile set search_path = '' as $$
@@ -204,6 +214,28 @@ create policy docs_post_insert on public.docs for insert to authenticated
 create policy docs_post_delete_own on public.docs for delete to authenticated
   using (col = 'posts' and owner = (select auth.uid()));
 
+-- docs: the gear marketplace. Listings are public to signed-in users; conversations only to the two people in them.
+create policy docs_read_listings on public.docs for select to authenticated
+  using (scope = 'global' and col = 'listings');
+create policy docs_listing_insert on public.docs for insert to authenticated
+  with check (scope = 'global' and col = 'listings');
+create policy docs_listing_update on public.docs for update to authenticated
+  using (scope = 'global' and col = 'listings' and owner = (select auth.uid()))
+  with check (scope = 'global' and col = 'listings');
+create policy docs_listing_delete on public.docs for delete to authenticated
+  using (scope = 'global' and col = 'listings' and owner = (select auth.uid()));
+create policy docs_read_threads on public.docs for select to authenticated
+  using (scope = 'global' and col = 'threads' and (data->>'buyer' = (select auth.uid())::text or data->>'seller' = (select auth.uid())::text));
+create policy docs_thread_insert on public.docs for insert to authenticated
+  with check (scope = 'global' and col = 'threads' and data->>'buyer' = (select auth.uid())::text);
+create policy docs_read_messages on public.docs for select to authenticated
+  using (scope = 'global' and col = 'messages' and public.in_thread(data->>'thread'));
+create policy docs_message_insert on public.docs for insert to authenticated
+  with check (scope = 'global' and col = 'messages' and public.in_thread(data->>'thread'));
+create policy docs_report_insert on public.docs for insert to authenticated
+  with check (scope = 'global' and col = 'reports');
+-- (no one can read reports through the app; review them in the Supabase dashboard)
+
 -- docs: the sub list
 create policy docs_own_profile_insert on public.docs for insert to authenticated
   with check (scope = 'global' and col in ('agents', 'contacts') and id = (select auth.uid())::text);
@@ -238,6 +270,7 @@ declare
   me uuid := (select auth.uid());
   recent int;
   t text;
+  recent_title text;
 begin
   if tg_op = 'UPDATE' then
     if new.scope <> old.scope or new.col <> old.col or new.id <> old.id then raise exception 'Documents can''t be moved'; end if;
@@ -256,6 +289,9 @@ begin
     if new.id <> 'info' then raise exception 'Bad team document'; end if;
     if char_length(coalesce(new.data->>'name', '')) not between 1 and 40 then raise exception 'Team name is 1 to 40 characters'; end if;
     update public.teams set name = new.data->>'name' where id::text = new.scope and name is distinct from new.data->>'name';
+    if jsonb_typeof(new.data->'lat') = 'number' and jsonb_typeof(new.data->'lng') = 'number' then
+      new.data := new.data || jsonb_build_object('lat', round((new.data->>'lat')::numeric, 2), 'lng', round((new.data->>'lng')::numeric, 2));
+    end if;
 
   elsif new.col = 'players' then
     -- which account a roster spot belongs to can only change through claim_player / unclaim_player
@@ -308,6 +344,66 @@ begin
     if char_length(coalesce(new.data->>'name', '')) not between 1 and 60 then raise exception 'Diamond name is 1 to 60 characters'; end if;
     if jsonb_typeof(new.data->'lat') <> 'number' or jsonb_typeof(new.data->'lng') <> 'number' then raise exception 'Diamond needs a location'; end if;
 
+  elsif new.col = 'listings' then
+    if tg_op = 'INSERT' then
+      select count(*) into recent from public.docs where owner = me and col = 'listings' and created_at > now() - interval '1 day';
+      if recent >= 15 then raise exception 'That''s a lot of listings for one day. Try again tomorrow.'; end if;
+    end if;
+    if char_length(coalesce(new.data->>'title', '')) not between 3 and 60 then raise exception 'Give it a title (3 to 60 characters)'; end if;
+    if char_length(coalesce(new.data->>'desc', '')) > 1000 then raise exception 'Description is up to 1000 characters'; end if;
+    if coalesce(new.data->>'cat', '') not in ('bat', 'glove', 'cleats', 'helmet', 'bag', 'balls', 'catcher', 'apparel', 'training', 'other')
+       or coalesce(new.data->>'cond', '') not in ('new', 'likenew', 'good', 'fair', 'worn')
+       or coalesce(new.data->>'status', 'active') not in ('active', 'pending', 'sold')
+       or coalesce(new.data->>'cert', '') not in ('', 'usa', 'usssa', 'isf', 'nsa', 'multi', 'none')
+       or coalesce(new.data->>'price', '') !~ '^[0-9]{1,4}$'
+       or char_length(coalesce(new.data->>'size', '')) > 30 or char_length(coalesce(new.data->>'brand', '')) > 30
+       or char_length(coalesce(new.data->>'area', '')) > 80
+    then raise exception 'Some of the listing details aren''t valid'; end if;
+    -- photos: up to 4, and only files in the seller's own folder for this listing (never outside links)
+    if jsonb_typeof(coalesce(new.data->'photos', '[]')) <> 'array' or jsonb_array_length(coalesce(new.data->'photos', '[]')) > 4
+       or exists (select 1 from jsonb_array_elements(coalesce(new.data->'photos', '[]')) x
+                  where x #>> '{}' !~ ('^' || coalesce(new.owner, me)::text || '/' || new.id || '/[A-Za-z0-9_-]{1,40}\.(jpg|png|webp)$'))
+    then raise exception 'Photos must be uploaded from the app'; end if;
+    if jsonb_typeof(new.data->'lat') = 'number' and jsonb_typeof(new.data->'lng') = 'number' then
+      new.data := new.data || jsonb_build_object('lat', round((new.data->>'lat')::numeric, 2), 'lng', round((new.data->>'lng')::numeric, 2));
+    else
+      new.data := new.data - 'lat' - 'lng';
+    end if;
+    new.data := new.data || jsonb_build_object('seller', coalesce(new.owner, me)::text);
+
+  elsif new.col = 'threads' then
+    if tg_op = 'INSERT' then
+      select count(*) into recent from public.docs where owner = me and col = 'threads' and created_at > now() - interval '1 hour';
+      if recent >= 20 then raise exception 'You''ve messaged a lot of sellers this hour. Try again later.'; end if;
+      -- one conversation per buyer per listing; the seller and title come from the listing itself
+      if new.id <> (new.data->>'listing') || '_' || me::text then raise exception 'Bad conversation'; end if;
+      select d.owner::text, d.data->>'title' into t, recent_title from public.docs d where d.scope = 'global' and d.col = 'listings' and d.id = new.data->>'listing';
+      if t is null then raise exception 'That listing is gone'; end if;
+      if t = me::text then raise exception 'That''s your own listing'; end if;
+      new.data := jsonb_build_object('listing', new.data->>'listing', 'buyer', me::text, 'seller', t, 'title', recent_title,
+                                     'at', (extract(epoch from now()) * 1000)::bigint);
+    else
+      -- only the system updates a conversation (last message, read markers); the people in it never change
+      new.data := new.data || jsonb_build_object('listing', old.data->'listing', 'buyer', old.data->'buyer', 'seller', old.data->'seller',
+                                                 'title', old.data->'title', 'at', old.data->'at');
+    end if;
+
+  elsif new.col = 'messages' then
+    if tg_op = 'UPDATE' then raise exception 'Messages can''t be edited'; end if;
+    select count(*) into recent from public.docs where owner = me and col = 'messages' and created_at > now() - interval '10 minutes';
+    if recent >= 60 then raise exception 'Slow down a little. Try again in a few minutes.'; end if;
+    if char_length(coalesce(new.data->>'text', '')) not between 1 and 1000 then raise exception 'Messages are 1 to 1000 characters'; end if;
+    new.data := jsonb_build_object('thread', new.data->>'thread', 'text', new.data->>'text', 'from', me::text,
+                                   'at', (extract(epoch from now()) * 1000)::bigint);
+
+  elsif new.col = 'reports' then
+    if tg_op = 'UPDATE' then raise exception 'Reports can''t be edited'; end if;
+    select count(*) into recent from public.docs where owner = me and col = 'reports' and created_at > now() - interval '1 day';
+    if recent >= 10 then raise exception 'Thanks, we have your reports. Try again tomorrow.'; end if;
+    if coalesce(new.data->>'reason', '') not in ('scam', 'prohibited', 'offensive', 'wrong', 'other') then raise exception 'Pick a reason'; end if;
+    new.data := jsonb_build_object('listing', left(new.data->>'listing', 80), 'reason', new.data->>'reason',
+                                   'note', left(coalesce(new.data->>'note', ''), 300), 'by', me::text, 'at', (extract(epoch from now()) * 1000)::bigint);
+
   elsif new.col = 'invites' then
     if tg_op = 'INSERT' then
       select count(*) into recent from public.docs where owner = me and col = 'invites' and created_at > now() - interval '1 hour';
@@ -338,6 +434,32 @@ begin
   -- removing someone from the roster frees their RSVPs too
   if old.col = 'players' then delete from public.docs where scope = old.scope and col = 'rsvp' and data->>'p' = old.id; end if;
   return old;
+end $$;
+
+create or replace function public.docs_after_insert() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare th record;
+begin
+  if new.col = 'messages' then
+    select data into th from public.docs where scope = 'global' and col = 'threads' and id = new.data->>'thread';
+    update public.docs set data = data || jsonb_build_object('last', left(new.data->>'text', 80), 'lastAt', new.data->'at', 'lastFrom', new.data->'from',
+        case when new.data->>'from' = th.data->>'buyer' then 'seenBuyer' else 'seenSeller' end, new.data->'at')
+      where scope = 'global' and col = 'threads' and id = new.data->>'thread';
+  end if;
+  return new;
+end $$;
+drop trigger if exists docs_after_insert on public.docs;
+create trigger docs_after_insert after insert on public.docs for each row execute function public.docs_after_insert();
+
+-- "I've read this conversation"
+create or replace function public.mark_thread_seen(p_thread text) returns void
+language plpgsql security definer set search_path = '' as $$
+declare me text := (select auth.uid())::text; th jsonb;
+begin
+  select data into th from public.docs where scope = 'global' and col = 'threads' and id = p_thread;
+  if th is null or me is null or (th->>'buyer' <> me and th->>'seller' <> me) then raise exception 'Not your conversation'; end if;
+  update public.docs set data = data || jsonb_build_object(case when th->>'buyer' = me then 'seenBuyer' else 'seenSeller' end, (extract(epoch from now()) * 1000)::bigint)
+    where scope = 'global' and col = 'threads' and id = p_thread;
 end $$;
 
 drop trigger if exists docs_touch on public.docs;
@@ -477,6 +599,9 @@ begin
     update public.team_members set role = 'captain'
       where (team_id, user_id) = (select team_id, user_id from public.team_members where team_id = r.team_id and user_id <> me order by joined_at limit 1);
   end loop;
+  delete from public.docs where scope = 'global' and col = 'messages' and data->>'thread' in
+    (select id from public.docs where scope = 'global' and col = 'threads' and (data->>'buyer' = me::text or data->>'seller' = me::text));
+  delete from public.docs where scope = 'global' and col = 'threads' and (data->>'buyer' = me::text or data->>'seller' = me::text);
   delete from public.docs where owner = me and (scope = 'global' or col = 'posts');
   delete from public.docs where scope = 'global' and col in ('agents', 'contacts') and id = me::text;
   delete from public.team_members where user_id = me;   -- triggers free roster spots and remove now-empty teams
@@ -487,10 +612,35 @@ end $$;
 revoke execute on all functions in schema public from public, anon;
 grant execute on function public.create_team(text), public.join_team(text), public.reset_join_code(uuid),
   public.claim_player(uuid, text), public.unclaim_player(uuid, text), public.doc_update(text, text, text, jsonb),
-  public.delete_my_account() to authenticated;
+  public.delete_my_account(), public.mark_thread_seen(text) to authenticated;
 grant execute on function public.is_member(text), public.is_captain(text), public.is_any_captain(), public.shares_team(uuid),
-  public.contact_unlocked(text), public.owns_player(text, text) to authenticated;
+  public.contact_unlocked(text), public.owns_player(text, text), public.in_thread(text) to authenticated;
 alter default privileges in schema public revoke execute on functions from public, anon;
+
+-- listing photos: anyone can view them (they're on public listings); people can only add or remove files in their own folder.
+-- Files are capped at 2 MB, images only, and 60 per person.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('listing-photos', 'listing-photos', true, 2097152, array['image/jpeg', 'image/png', 'image/webp'])
+on conflict (id) do update set public = true, file_size_limit = 2097152, allowed_mime_types = array['image/jpeg', 'image/png', 'image/webp'];
+
+create or replace function public.my_photo_count() returns int
+language sql stable security definer set search_path = '' as $$
+  select count(*)::int from storage.objects where bucket_id = 'listing-photos' and (storage.foldername(name))[1] = (select auth.uid())::text;
+$$;
+revoke execute on function public.my_photo_count() from public, anon;
+grant execute on function public.my_photo_count() to authenticated;
+
+drop policy if exists "dugout photos: see own" on storage.objects;
+drop policy if exists "dugout photos: upload own" on storage.objects;
+drop policy if exists "dugout photos: delete own" on storage.objects;
+create policy "dugout photos: see own" on storage.objects for select to authenticated
+  using (bucket_id = 'listing-photos' and (storage.foldername(name))[1] = (select auth.uid())::text);
+create policy "dugout photos: upload own" on storage.objects for insert to authenticated
+  with check (bucket_id = 'listing-photos' and (storage.foldername(name))[1] = (select auth.uid())::text
+              and name ~ '^[0-9a-f-]{36}/[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_-]{1,40}\.(jpg|png|webp)$'
+              and public.my_photo_count() < 60);
+create policy "dugout photos: delete own" on storage.objects for delete to authenticated
+  using (bucket_id = 'listing-photos' and (storage.foldername(name))[1] = (select auth.uid())::text);
 
 -- live updates
 do $$ begin

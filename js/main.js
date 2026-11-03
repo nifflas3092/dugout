@@ -215,6 +215,11 @@ async function teamMenu(session, team, teams, myName) {
     e.preventDefault();
     if (dlg.querySelector('#mDelT').value.trim().toUpperCase() !== 'DELETE') return err('Type DELETE to confirm.');
     e.submitter.disabled = true;
+    // listing photos live in file storage, which the database can't clean up by itself: remove them first
+    try {
+      const b = sb.storage.from('listing-photos'), { data: folders } = await b.list(me, { limit: 1000 });
+      for (const f of folders || []) { const { data: files } = await b.list(`${me}/${f.name}`, { limit: 100 }); if (files && files.length) await b.remove(files.map(x => `${me}/${f.name}/${x.name}`)); }
+    } catch (_) {}
     const { error } = await sb.rpc('delete_my_account');
     if (error) { e.submitter.disabled = false; return err(friendly(error, 'Couldn’t delete your account. Try again, or email us.')); }
     forgetDevice(); await sb.auth.signOut().catch(() => {}); location.replace(location.pathname);

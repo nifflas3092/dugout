@@ -31,6 +31,27 @@ The two most common ways apps like this leak data are:
 - The database stamps the team name and sender on each request; the app can't fake them.
 - A sub can only answer a request. A captain can't mark their own request as accepted.
 
+**Gear marketplace**
+- Any signed-in user can browse and post listings. Only the seller can edit, mark sold, or delete a listing.
+- Conversations and messages are visible only to that buyer and seller.
+  - The database fills in who's in a conversation, and who sent each message, from the listing and the sign-in. Neither can be faked.
+  - Messages can't be edited.
+- Listing photos:
+  - must be files in the seller's own storage folder for that listing; outside links are refused
+  - up to 4 per listing, 2 MB each, images only, 60 per person
+- The app redraws every photo before upload. That shrinks it and strips hidden metadata, including GPS location.
+- Pickup areas are rounded to about 1 km.
+- Reports are write-only: nobody can read them in the app. Review them in the Supabase dashboard (the `docs` table, `col = 'reports'`).
+- Limits:
+  - 15 new listings a day
+  - 20 new conversations an hour
+  - 60 messages per 10 minutes
+  - 10 reports a day
+- Dugout never handles money. The app tells buyers not to send deposits before seeing an item.
+
+**Weather**
+- Forecasts are fetched by the browser straight from MET Norway, using a location rounded to about 1 km. Nothing is stored on our side.
+
 **Validation, on every write**
 - Document ids must be letters, digits, `-` or `_`. This blocks script injection through ids.
 - Only known collections are allowed, and team data and the global sub list can't be mixed.
@@ -97,6 +118,10 @@ Every rule above has an attack in `tests/database/attack.py` that tries to break
 - [ ] Never put the **service_role** key anywhere in this project. It bypasses every rule. Only the anon/public key belongs in `config.js`.
 
 ## Known limits
+
+**Marketplace moderation**
+- There's no admin screen yet: reports pile up in the database for you to review by hand.
+- Before the marketplace grows, decide who checks reports and how fast. Consider adding a way to hide a listing without deleting it.
 
 **Live updates and deletions**
 - Supabase's live updates don't apply security rules to *deletions*.

@@ -1,4 +1,6 @@
 /* Dugout team app. The screens and logic; data access comes from ./platform.js */
+import { forecast, outlook, CREDIT } from './weather.js';
+import { renderGear, unreadCount, gearBusy } from './market.js';
 export function startApp(platform) {
 /* ---------- state ---------- */
 const POS = ['P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'LCF', 'RCF', 'RF'];
@@ -8,7 +10,7 @@ const RESULTS = [
   { k: 'BB', label: 'Walk' }, { k: 'E', label: 'Reached on error' }, { k: 'SF', label: 'Sac fly' },
   { k: 'OUT', label: 'Out', cls: 'outy' }, { k: 'K', label: 'Strikeout', cls: 'outy' },
 ];
-const st = { contacts: {}, agents: [], diamonds: [], invites: [], team: null, players: [], games: [], rsvp: {}, ab: [], posts: [], loaded: { team: false, players: false, games: false }, canEdit: false, canWrite: false, offline: false };
+const st = { listings: [], threads: [], messages: [], contacts: {}, agents: [], diamonds: [], invites: [], team: null, players: [], games: [], rsvp: {}, ab: [], posts: [], loaded: { team: false, players: false, games: false }, canEdit: false, canWrite: false, offline: false };
 let db = null, user = null;
 const view = document.getElementById('view');
 const LS = { get(k, d) { try { const v = localStorage.getItem('dugout-' + k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } }, set(k, v) { try { localStorage.setItem('dugout-' + k, JSON.stringify(v)); } catch (_) {} } };
@@ -43,6 +45,7 @@ function render() {
   header();
   if (!st.loaded.team && !st.offline) { view.innerHTML = `<div class="empty">Loading your team…</div>`; return; }
   if (tab === 'subs' && (st.loaded.team || st.offline)) return renderSubs();
+  if (tab === 'gear' && (st.loaded.team || st.offline)) return renderGear(gearCtx());
   if (!st.team && !st.offline) return renderSetup();
   if (st.offline && !st.team) return renderOffline();
   ({ subs: renderSubs, schedule: renderSchedule, lineup: renderLineup, score: renderScore, stats: renderStats, roster: renderRoster, board: renderBoard }[tab] || renderSchedule)();
@@ -55,6 +58,8 @@ function header() {
   const fin = st.games.filter(g => g.status === 'final');
   const w = fin.filter(g => sum(g.us) > sum(g.them)).length, l = fin.filter(g => sum(g.us) < sum(g.them)).length, tie = fin.length - w - l;
   document.getElementById('record').textContent = fin.length ? `${w}-${l}${tie ? '-' + tie : ''}` : '';
+  const badge = document.getElementById('gearBadge'), n = myId ? unreadCount(st, myId) : 0;
+  if (badge) { badge.textContent = n; badge.hidden = !n; badge.setAttribute('aria-label', `${n} unread`); }
 }
 
 function renderOffline() {
@@ -86,7 +91,8 @@ function renderSetup() {
 
 /* --- Games --- */
 function renderSchedule() {
-  const games = sortedGames(), up = games.filter(g => g.status !== 'final' && g.date >= today()), past = games.filter(g => !up.includes(g));
+  const games = sortedGames(), rained = games.filter(g => g.status === 'rainout'), up = games.filter(g => g.status !== 'final' && g.status !== 'rainout' && g.date >= today()), past = games.filter(g => !up.includes(g) && g.status !== 'rainout');
+  const needMakeup = rained.filter(g => !g.makeup);
   const mine = me && st.players.find(p => p.id === me);
   view.innerHTML = `
   <div class="row" style="margin-top:12px"><div class="grow small muted">${mine ? `You're <b>${esc(mine.name)}</b> <button class="btn ghost small" id="notMe" type="button">Change</button>` : st.players.length ? `Open <b>Show everyone</b> and tap <b>This is me</b> next to your name so you can answer for yourself.` : ''}</div>
@@ -94,7 +100,12 @@ function renderSchedule() {
   <div id="gameForm"></div>
   <h2>Coming up</h2>
   <div class="stack games">${up.length ? up.map(gameCard).join('') : `<div class="panel empty">No games scheduled.${st.canEdit ? ' Tap <b>Add game</b> to put one on the schedule.' : ''}</div>`}</div>
-  ${past.length ? `<h2>Played</h2><div class="stack games">${past.reverse().map(gameCard).join('')}</div>` : ''}`;
+  ${rained.length ? `<h2>Rained out</h2><p class="muted small" style="margin-top:-6px">${rained.length} this season${needMakeup.length ? ` · <b style="color:var(--out)">${needMakeup.length} still need${needMakeup.length === 1 ? 's' : ''} a makeup date</b>` : ' · all made up'}</p><div class="stack games">${[...needMakeup, ...rained.filter(g => g.makeup)].map(gameCard).join('')}</div>` : ''}
+  ${past.length ? `<h2>Played</h2><div class="stack games">${past.reverse().map(gameCard).join('')}</div>` : ''}
+  ${up.some(g => g.wx) ? `<p class="muted small" style="margin-top:16px">${CREDIT}. Forecasts change; your league makes the final call.</p>` : ''}`;
+  view.querySelectorAll('[data-rain]').forEach(b => b.addEventListener('click', () => confirmInline(b, 'Mark this game rained out?', () => write(() => db.doc('games/' + b.dataset.rain).update({ status: 'rainout', rainedAt: Date.now() }), 'Marked rained out. Schedule a makeup when you have a date.'))));
+  view.querySelectorAll('[data-unrain]').forEach(b => b.addEventListener('click', () => write(() => db.doc('games/' + b.dataset.unrain).update({ status: 'scheduled' }), 'Back on the schedule')));
+  view.querySelectorAll('[data-makeup]').forEach(b => b.addEventListener('click', () => { gameForm(null, st.games.find(g => g.id === b.dataset.makeup)); document.getElementById('gameForm').scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
   view.querySelectorAll('[data-rsvp]').forEach(b => b.addEventListener('click', () => setRsvp(b.dataset.g, b.dataset.p, b.dataset.v)));
   view.querySelectorAll('[data-me]').forEach(b => b.addEventListener('click', () => write(() => platform.claimPlayer(b.dataset.me), 'Got it. You can answer for yourself now.')));
   view.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { const el = document.getElementById('rs-' + b.dataset.open); el.hidden = !el.hidden; if (el.hidden) openLists.delete(b.dataset.open); else openLists.add(b.dataset.open); b.setAttribute('aria-expanded', !el.hidden); b.textContent = el.hidden ? 'Show everyone' : 'Hide list'; }));
@@ -108,7 +119,9 @@ function gameCard(g) {
   const d = fmtDate(g.date), counts = { in: 0, maybe: 0, out: 0 };
   st.players.forEach(p => { const s = rsvpOf(g.id, p.id); if (counts[s] !== undefined) counts[s]++; });
   const noReply = st.players.length - counts.in - counts.maybe - counts.out;
-  const final = g.status === 'final', us = sum(g.us), them = sum(g.them);
+  const final = g.status === 'final', us = sum(g.us), them = sum(g.them), rain = g.status === 'rainout';
+  if (rain) return rainCard(g, d);
+  const wx = final ? null : gameWeather(g); g.wx = !!wx;
   const players = st.players.filter(p => p.id !== me);
   const meRow = me && st.players.find(p => p.id === me);
   return `<article class="panel game" aria-label="${esc(g.home ? 'Home' : 'Away')} game against ${esc(g.opp)} on ${esc(g.date)}">
@@ -118,8 +131,10 @@ function gameCard(g) {
         <div class="vs">${g.home ? 'vs' : '@'} ${esc(g.opp)}</div>
         <div class="muted small">${esc(fmtTime(g.time))}${g.field ? ' · ' + esc(g.field) : ''}${g.home ? ' · Home' : ' · Away'}</div>
         ${final ? `<div class="row" style="margin-top:6px"><span class="pill final">${us > them ? 'Won' : us < them ? 'Lost' : 'Tied'} ${us}-${them}</span></div>` : ''}
+        ${g.makeupOf ? `<div class="muted small">Makeup for the rained-out game${(() => { const o = st.games.find(x => x.id === g.makeupOf); return o ? ' on ' + esc(fmtDate(o.date).m + ' ' + fmtDate(o.date).d) : ''; })()}</div>` : ''}
       </div>
     </div>
+    ${wx ? `<div class="wx wx-${wx.level}" role="note"><span class="wx-icon" aria-hidden="true">${wx.icon}</span><span class="grow"><b>${esc(wx.temp)}°C</b> · ${esc(wx.text)}${wx.wind >= 30 ? ` · windy (${esc(wx.wind)} km/h)` : ''}</span>${st.canEdit && wx.level !== 'ok' ? `<button class="btn ghost small" type="button" data-rain="${esc(g.id)}">Rained out</button>` : ''}</div>` : ''}
     ${final ? '' : `<div class="count-pills" aria-label="Attendance">
       <span class="pill in">${counts.in} in</span><span class="pill maybe">${counts.maybe} maybe</span><span class="pill out">${counts.out} out</span>
       ${noReply ? `<span class="pill" style="border:1.5px solid var(--line)">${noReply} no reply</span>` : ''}
@@ -133,9 +148,30 @@ function gameCard(g) {
     <div class="row">
       <button class="btn ghost small" type="button" data-go="lineup" data-g="${esc(g.id)}">Lineup</button>
       <button class="btn ghost small" type="button" data-go="score" data-g="${esc(g.id)}">${final ? 'Box score' : 'Keep score'}</button>
-      ${st.canEdit ? `<button class="btn ghost small" type="button" data-editgame="${esc(g.id)}">Edit</button><button class="btn danger small" type="button" data-delgame="${esc(g.id)}">Delete</button>` : ''}
+      ${st.canEdit ? `<button class="btn ghost small" type="button" data-editgame="${esc(g.id)}">Edit</button>${!final && !(wx && wx.level !== 'ok') ? `<button class="btn ghost small" type="button" data-rain="${esc(g.id)}">Rained out</button>` : ''}<button class="btn danger small" type="button" data-delgame="${esc(g.id)}">Delete</button>` : ''}
     </div>
   </article>`;
+}
+function rainCard(g, d) {
+  const mk = g.makeup && st.games.find(x => x.id === g.makeup);
+  return `<article class="panel game rained" aria-label="Rained-out game against ${esc(g.opp)} on ${esc(g.date)}">
+    <div class="game-head">
+      <div class="datebox" aria-hidden="true"><div class="m">${esc(d.m)}</div><div class="d">${esc(d.d)}</div><div class="w">${esc(d.w)}</div></div>
+      <div class="grow" style="min-width:0">
+        <div class="vs">${g.home ? 'vs' : '@'} ${esc(g.opp)}</div>
+        <div class="muted small">${esc(fmtTime(g.time))}${g.field ? ' · ' + esc(g.field) : ''}</div>
+        <div class="row" style="margin-top:6px"><span class="pill rain">🌧️ Rained out</span>${mk ? `<span class="pill in">Makeup ${esc(fmtDate(mk.date).w)} ${esc(fmtDate(mk.date).m)} ${esc(fmtDate(mk.date).d)}${mk.time ? ', ' + esc(fmtTime(mk.time)) : ''}</span>` : '<span class="pill warn">Needs a makeup</span>'}</div>
+      </div>
+    </div>
+    ${st.canEdit ? `<div class="row">${mk ? '' : `<button class="btn small" type="button" data-makeup="${esc(g.id)}">Schedule makeup</button>`}<button class="btn ghost small" type="button" data-unrain="${esc(g.id)}">Not rained out</button><button class="btn danger small" type="button" data-delgame="${esc(g.id)}">Delete</button></div>` : ''}
+  </article>`;
+}
+/* where a game is played, for the forecast: its diamond if one was picked, otherwise the team's home area */
+function gameWeather(g) {
+  const lat = g.lat ?? st.team?.lat, lng = g.lng ?? st.team?.lng;
+  if (lat == null || lng == null) return null;
+  const series = forecast(lat, lng, () => render());
+  return series ? outlook(series, g.date, g.time) : null;
 }
 function rsvpSeg(gid, pid) {
   const s = rsvpOf(gid, pid), name = pName(pid);
@@ -148,16 +184,18 @@ async function setRsvp(gid, pid, v) {
   const ok = await write(() => db.doc('rsvp/' + key).set({ g: gid, p: pid, s: v, at: Date.now() }), `${pName(pid)}: ${v === 'in' ? 'in' : v === 'out' ? 'out' : 'maybe'}`);
   if (!ok) { if (prev) st.rsvp[key] = prev; else delete st.rsvp[key]; render(); }
 }
-function gameForm(g) {
-  const box = document.getElementById('gameForm');
+function gameForm(g, makeupOf = null) {
+  const box = document.getElementById('gameForm'), src = g || makeupOf;
+  const nearby = [...st.diamonds].sort((a, b) => String(a.name).localeCompare(String(b.name)));
   box.innerHTML = `<form class="panel" id="gf" style="margin-top:12px">
-    <h3>${g ? 'Edit game' : 'New game'}</h3>
+    <h3>${g ? 'Edit game' : makeupOf ? `Makeup for ${esc(makeupOf.opp)}` : 'New game'}</h3>
     <div class="form-grid">
-      <label for="gOpp">Opponent<input id="gOpp" type="text" required maxlength="40" value="${esc(g?.opp || '')}"></label>
+      <label for="gOpp">Opponent<input id="gOpp" type="text" required maxlength="40" value="${esc(src?.opp || '')}"></label>
       <label for="gDate">Date<input id="gDate" type="date" required value="${esc(g?.date || today())}"></label>
-      <label for="gTime">Start time<input id="gTime" type="time" value="${esc(g?.time || '18:30')}"></label>
-      <label for="gField">Field<input id="gField" type="text" maxlength="40" value="${esc(g?.field || '')}" placeholder="e.g. Diamond 3"></label>
-      <label for="gHome">Home or away<select id="gHome"><option value="1"${g?.home !== false ? ' selected' : ''}>Home</option><option value="0"${g?.home === false ? ' selected' : ''}>Away</option></select></label>
+      <label for="gTime">Start time<input id="gTime" type="time" value="${esc(src?.time || '18:30')}"></label>
+      <label for="gField">Field<input id="gField" type="text" maxlength="40" value="${esc(src?.field || '')}" placeholder="e.g. Diamond 3"></label>
+      <label for="gHome">Home or away<select id="gHome"><option value="1"${src?.home !== false ? ' selected' : ''}>Home</option><option value="0"${src?.home === false ? ' selected' : ''}>Away</option></select></label>
+      <label for="gDia">Park, for the forecast<select id="gDia"><option value="">${st.team?.lat != null ? `Team home area${st.team.place ? ' (' + esc(st.team.place) + ')' : ''}` : 'Not set'}</option>${nearby.map(d => `<option value="${esc(d.id)}"${src?.diamond === d.id ? ' selected' : ''}>${esc(d.name)}${d.label ? ' · ' + esc(d.label) : ''}</option>`).join('')}</select></label>
     </div>
     <div class="row"><button class="btn" type="submit">${g ? 'Save game' : 'Add game'}</button><button class="btn ghost" type="button" id="gCancel">Cancel</button></div>
   </form>`;
@@ -165,9 +203,12 @@ function gameForm(g) {
   document.getElementById('gCancel').onclick = () => box.innerHTML = '';
   document.getElementById('gf').addEventListener('submit', async e => {
     e.preventDefault();
-    const data = { opp: document.getElementById('gOpp').value.trim(), date: document.getElementById('gDate').value, time: document.getElementById('gTime').value, field: document.getElementById('gField').value.trim(), home: document.getElementById('gHome').value === '1' };
+    const dia = st.diamonds.find(d => d.id === document.getElementById('gDia').value);
+    const data = { opp: document.getElementById('gOpp').value.trim(), date: document.getElementById('gDate').value, time: document.getElementById('gTime').value, field: document.getElementById('gField').value.trim(), home: document.getElementById('gHome').value === '1',
+      diamond: dia ? dia.id : null, lat: dia ? dia.lat : null, lng: dia ? dia.lng : null };
     if (!data.opp || !data.date) return;
     if (g) await write(() => db.doc('games/' + g.id).update(data), 'Game saved');
+    else if (makeupOf) { const id = uid(); await write(async () => { await db.doc('games/' + id).set({ ...data, makeupOf: makeupOf.id, status: 'scheduled', us: [], them: [], inning: 1, bi: 0 }); await db.doc('games/' + makeupOf.id).update({ makeup: id }); }, 'Makeup game scheduled'); }
     else await write(() => db.doc('games/' + uid()).set({ ...data, status: 'scheduled', us: [], them: [], inning: 1, bi: 0 }), 'Game added');
     box.innerHTML = '';
   });
@@ -348,6 +389,7 @@ function renderRoster() {
       <label for="tLeague">League<input id="tLeague" type="text" maxlength="60" value="${esc(st.team?.league)}"></label>
       <label for="tSeason">Season<input id="tSeason" type="text" maxlength="30" value="${esc(st.team?.season)}"></label>
       <label for="tFee">Player fee ($)<input id="tFee" type="number" min="0" value="${esc(st.team?.fee || 0)}"></label>
+      <label for="tPlace">Home area, for game forecasts<input id="tPlace" type="text" maxlength="80" value="${esc(st.team?.place || '')}" placeholder="Postal code or neighbourhood"></label>
       <label for="tInn">Innings per game<input id="tInn" type="number" min="3" max="9" value="${esc(st.team?.innings || 7)}"></label>
     </div>
     <div class="row"><button class="btn" type="submit">Save settings</button></div>
@@ -373,7 +415,11 @@ function renderRoster() {
   view.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => confirmInline(b, 'Remove from roster?', () => write(() => db.doc('players/' + b.dataset.del).delete(), 'Player removed'))));
   view.querySelectorAll('[data-paid]').forEach(b => b.addEventListener('click', () => { const p = st.players.find(x => x.id === b.dataset.paid); write(() => db.doc('players/' + p.id).update({ paid: !p.paid }), `${p.name}: ${p.paid ? 'not paid' : 'paid'}`); }));
   document.getElementById('tf').addEventListener('submit', e => { e.preventDefault();
-    write(() => db.doc('team/info').update({ name: document.getElementById('tName').value.trim() || st.team.name, league: document.getElementById('tLeague').value.trim(), season: document.getElementById('tSeason').value.trim(), fee: +document.getElementById('tFee').value || 0, innings: +document.getElementById('tInn').value || 7 }), 'Settings saved'); });
+    const place = document.getElementById('tPlace').value.trim();
+    const save = loc => write(() => db.doc('team/info').update({ name: document.getElementById('tName').value.trim() || st.team.name, league: document.getElementById('tLeague').value.trim(), season: document.getElementById('tSeason').value.trim(), fee: +document.getElementById('tFee').value || 0, innings: +document.getElementById('tInn').value || 7,
+      ...(loc ? { place: loc.label, lat: loc.lat, lng: loc.lng } : place ? {} : { place: '', lat: null, lng: null }) }), loc ? `Settings saved. Forecasts use ${loc.label}.` : 'Settings saved');
+    if (place && place !== st.team?.place) locate(place).then(save, () => { toast('Couldn’t find that area. Try a postal code.'); save(null); });
+    else save(null); });
 }
 
 /* --- Board: announcements and chat --- */
@@ -403,6 +449,9 @@ const saveF = () => LS.set('filters', F);
 const km = (a, b) => { const R = 6371, r = x => x * Math.PI / 180, dLa = r(b.lat - a.lat), dLo = r(b.lng - a.lng);
   const h = Math.sin(dLa / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLo / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(h)); };
 // turn a place into rough coordinates: typed coordinates are used as-is, anything else (postal code, neighbourhood, park) goes to the geocoder in platform.js
+function gearCtx() {
+  return { platform, db, st, view, esc, toast, write, render, locate, km, LS, confirmInline, uid, myId: () => myId, myName: () => (user && user.name ? user.name() : '') };
+}
 async function locate(text) {
   const m = String(text).match(/^\s*(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)\s*$/);
   if (m) return { lat: +m[1], lng: +m[2], label: `${(+m[1]).toFixed(3)}, ${(+m[2]).toFixed(3)}` };
@@ -627,7 +676,7 @@ render();
   st.canEdit = user ? !!user.canEdit() : false;
   try { myId = user ? await user.id() : null; } catch (_) { myId = null; }
   const cw = user ? user.can('data.write') : null; st.canWrite = cw === null ? true : !!cw;
-  let pending = null; const soon = () => { clearTimeout(pending); pending = setTimeout(() => { if (!document.activeElement || !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) render(); else pendingRender = true; }, 60); };
+  let pending = null; const soon = () => { clearTimeout(pending); pending = setTimeout(() => { if ((location.hash || '') === '#gear' && gearBusy()) { header(); return; } const ae = document.activeElement, chatting = ae && ae.id === 'mtxt'; if (!ae || !['INPUT', 'TEXTAREA', 'SELECT'].includes(ae.tagName) || chatting) { render(); if (chatting) { const m = document.getElementById('mtxt'); if (m) { m.focus(); m.setSelectionRange(m.value.length, m.value.length); } } } else pendingRender = true; }, 60); };
   let pendingRender = false; document.addEventListener('focusout', () => { if (pendingRender) { pendingRender = false; setTimeout(render, 0); } });
   const fail = () => { clearTimeout(timer); };
   db.doc('team/info').onSnapshot(s => { clearTimeout(timer); st.team = s.exists ? s.data() : null; st.loaded.team = true; st.offline = false; soon(); }, fail);
@@ -640,5 +689,8 @@ render();
   db.collection('invites').onSnapshot(s => { st.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); db.collection('contacts').refresh().catch(() => {}); soon(); }, fail);
   db.collection('contacts').onSnapshot(s => { st.contacts = {}; s.docs.forEach(d => st.contacts[d.id] = d.data().contact); soon(); }, fail);
   db.collection('posts').onSnapshot(s => { st.posts = s.docs.map(d => ({ id: d.id, ...d.data() })); soon(); }, fail);
+  db.collection('listings').onSnapshot(s => { st.listings = s.docs.map(d => ({ id: d.id, ...d.data() })); soon(); }, fail);
+  db.collection('threads').onSnapshot(s => { st.threads = s.docs.map(d => ({ id: d.id, ...d.data() })); db.collection('messages').refresh().catch(() => {}); soon(); }, fail);
+  db.collection('messages').onSnapshot(s => { st.messages = s.docs.map(d => ({ id: d.id, ...d.data() })); soon(); }, fail);
 })();
 }

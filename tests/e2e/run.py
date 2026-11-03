@@ -9,7 +9,21 @@ INDEX=re.sub(r' integrity="[^"]+"','',open(APP+'/index.html').read())  # the tes
 srv=subprocess.Popen([sys.executable,'-m','http.server','8766','-d',APP],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 errs=[]; checks=[]
 def check(name, cond): checks.append(bool(cond)); print(('PASS ' if cond else 'FAIL ')+name)
+import datetime as _dt, base64 as _b64
+def met_forecast():
+  now=_dt.datetime.now(_dt.timezone.utc).replace(minute=0,second=0,microsecond=0); ts=[]
+  for h in range(0, 60): ts.append({'time':(now+_dt.timedelta(hours=h)).strftime('%Y-%m-%dT%H:%M:%SZ'),'data':{'instant':{'details':{'air_temperature':12.0,'wind_speed':4.0}},'next_1_hours':{'summary':{'symbol_code':'rain'},'details':{'precipitation_amount':3.0}},'next_6_hours':{'summary':{'symbol_code':'rain'},'details':{'precipitation_amount':18.0}}}})
+  t=now+_dt.timedelta(hours=60)
+  while t < now+_dt.timedelta(days=9.5): ts.append({'time':t.strftime('%Y-%m-%dT%H:%M:%SZ'),'data':{'instant':{'details':{'air_temperature':11.0,'wind_speed':5.0}},'next_6_hours':{'summary':{'symbol_code':'rain'},'details':{'precipitation_amount':18.0}}}}); t+=_dt.timedelta(hours=6)
+  return json.dumps({'properties':{'meta':{},'timeseries':ts}})
+def _png():
+  import zlib, struct
+  w,h=160,120; raw=b''.join(b'\x00'+bytes([200,90,40]*w) for _ in range(h))  # a plain orange picture
+  chunk=lambda t,d: struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d)&0xffffffff)
+  return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',w,h,8,2,0,0,0))+chunk(b'IDAT',zlib.compress(raw))+chunk(b'IEND',b'')
+PNG=_png()
 async def setup(ctx):
+  await ctx.route('https://api.met.no/**', lambda r: r.fulfill(body=met_forecast(), content_type='application/json', headers={'Expires':'Wed, 01 Jan 2031 00:00:00 GMT','Access-Control-Allow-Origin':'*'}))
   await ctx.route('https://cdn.jsdelivr.net/**', lambda r: r.fulfill(body=FAKE, content_type='application/javascript'))
   await ctx.route('**/config.js', lambda r: r.fulfill(body=CFG, content_type='application/javascript'))
   await ctx.route(re.compile(r'http://localhost:8766/(index\.html)?(\?.*)?$'), lambda r: r.fulfill(body=INDEX, content_type='text/html'))
@@ -75,6 +89,54 @@ async def main():
     await cap.wait_for_timeout(500); t=await cap.inner_text('#subBody')
     check('after yes, captain sees contact', '416-555-0100' in t)
     await cap.screenshot(path=OUT+'v2_5_contact.png', full_page=True)
+
+
+    # ---- weather and rain-outs
+    await cap.goto('http://localhost:8766/#roster'); await cap.wait_for_selector('#tPlace'); await cap.fill('#tPlace','Etobicoke'); await cap.click('#tf button[type=submit]'); await cap.wait_for_timeout(600)
+    await cap.goto('http://localhost:8766/#schedule'); await cap.wait_for_timeout(1200)
+    check('game shows a rain warning from the forecast', await cap.locator('.wx-high').count()==1 and 'Rain likely' in await cap.inner_text('.wx-high'))
+    check('forecast credit shown', 'MET Norway' in await cap.inner_text('#view'))
+    await cap.screenshot(path=OUT+'v3_weather.png')
+    await cap.locator('.wx [data-rain]').click(); await cap.locator('.confirm .danger').click(); await cap.wait_for_timeout(500)
+    t=await cap.inner_text('#view')
+    check('rained-out game moves to its own section and needs a makeup', 'RAINED OUT' in t.upper() and 'Needs a makeup' in t and '1 still needs a makeup date' in t)
+    await cap.click('[data-makeup]'); await cap.wait_for_selector('#gf'); check('makeup form prefilled', 'makeup for base invaders' in (await cap.inner_text('#gf')).lower() and await cap.input_value('#gOpp')=='Base Invaders')
+    await cap.fill('#gDate','2026-11-17'); await cap.click('#gf button[type=submit]'); await cap.wait_for_timeout(600)
+    t=await cap.inner_text('#view')
+    check('makeup scheduled and linked both ways', 'Makeup Tue Nov 17' in t and 'Makeup for the rained-out game' in t and 'all made up' in t)
+    await cap.screenshot(path=OUT+'v3_rainout.png', full_page=True)
+    await pl.goto('http://localhost:8766/#schedule'); await pl.wait_for_timeout(600)
+    check('players see the rain-out but get no captain buttons', 'Rained out' in await pl.inner_text('#view') and await pl.locator('[data-makeup], [data-unrain], [data-rain]').count()==0)
+
+    # ---- gear marketplace
+    await pl.goto('http://localhost:8766/#gear'); await pl.wait_for_selector('[data-gm=sell]'); await pl.click('[data-gm=sell]'); await pl.wait_for_selector('#gsf')
+    await pl.fill('#st','Miken Freak 34oz'); await pl.fill('#sp','150'); await pl.select_option('#sce','usssa'); await pl.fill('#sb','Miken'); await pl.fill('#sa','Etobicoke')
+    await pl.set_input_files('#sph', files=[{'name':'bat.png','mimeType':'image/png','buffer':PNG}]); await pl.wait_for_timeout(600)
+    check('photo preview appears and typed text survives the redraw', await pl.locator('#gsf .gear-thumb').count()==1 and await pl.input_value('#st')=='Miken Freak 34oz')
+    await pl.fill('#sd','Two seasons, no cracks.'); await pl.click('#ssave'); await pl.wait_for_timeout(900)
+    t=await pl.inner_text('#gearBody')
+    check('listing posted with seller name, cert and pickup area', 'miken freak' in t.lower() and 'USSSA' in t and 'Etobicoke' in t and '$150' in t)
+    photos=await pl.evaluate("JSON.parse(localStorage.getItem('fake-sb-db')).docs.find(d=>d.col==='listings').data.photos")
+    check('photo stored under the seller’s own folder as a re-encoded JPEG', len(photos)==1 and photos[0].startswith('u-pl/') and photos[0].endswith('.jpg'))
+    await pl.screenshot(path=OUT+'v3_listing.png', full_page=True)
+    await cap.goto('http://localhost:8766/#gear'); await cap.wait_for_selector('.gear-card'); await cap.wait_for_timeout(300)
+    check('buyer sees the listing card with its photo', await cap.locator('.gear-card img').count()==1)
+    await cap.select_option('#gcat','glove'); await cap.wait_for_timeout(200); check('category filter hides it', await cap.locator('.gear-card').count()==0)
+    await cap.select_option('#gcat',''); await cap.fill('#gmax','100'); await cap.press('#gmax','Tab'); await cap.wait_for_timeout(200); check('max price filter hides it', await cap.locator('.gear-card').count()==0)
+    await cap.fill('#gmax',''); await cap.press('#gmax','Tab'); await cap.wait_for_timeout(200)
+    await cap.screenshot(path=OUT+'v3_browse.png', full_page=True)
+    await cap.click('.gear-card'); await cap.wait_for_selector('#gmsg'); await cap.click('#gmsg'); await cap.wait_for_timeout(700)
+    await cap.fill('#mtxt','Is this still available? Could meet Saturday.'); await cap.click('#mform .btn'); await cap.wait_for_timeout(900)
+    await pl.goto('http://localhost:8766/#schedule'); await pl.wait_for_timeout(800)
+    check('seller gets an unread badge on the Gear tab', (await pl.locator('#gearBadge').is_visible()) and (await pl.inner_text('#gearBadge'))=='1')
+    await pl.goto('http://localhost:8766/#gear'); await pl.wait_for_selector('[data-gm=inbox]'); await pl.click('[data-gm=inbox]'); await pl.wait_for_selector('[data-th]'); await pl.click('[data-th]'); await pl.wait_for_selector('#mform')
+    check('seller sees the message', 'Could meet Saturday' in await pl.inner_text('#chat'))
+    await pl.fill('#mtxt','Yes! Saturday 10am at the park.'); await pl.click('#mform .btn'); await pl.wait_for_timeout(900)
+    await cap.wait_for_timeout(600); check('buyer sees the reply live', 'Saturday 10am' in await cap.inner_text('#gearBody'))
+    await pl.screenshot(path=OUT+'v3_chat.png')
+    await pl.click('#gview'); await pl.wait_for_selector('[data-st=sold]'); await pl.click('[data-st=sold]'); await pl.wait_for_timeout(600)
+    await cap.click('[data-gm=browse]'); await cap.wait_for_timeout(400)
+    check('sold items hidden from browse by default', await cap.locator('.gear-card').count()==0)
 
     await pl.click('text=Team menu'); await pl.wait_for_selector('dialog.menu[open]')
     check('player menu has no captain controls', await pl.locator('#mNewCode, [data-kick]').count()==0)

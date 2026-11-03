@@ -3,7 +3,7 @@
    Here that is mapped onto one Postgres table, public.docs (scope, col, id, data), with live updates. */
 import { GEOCODER, MAPBOX_TOKEN } from '../config.js';
 
-const GLOBAL = new Set(['agents', 'contacts', 'diamonds', 'invites']); // the league-wide sub list; everything else belongs to one team
+const GLOBAL = new Set(['agents', 'contacts', 'diamonds', 'invites', 'listings', 'threads', 'messages', 'reports']); // the league-wide sub list; everything else belongs to one team
 
 export function createPlatform(sb, { session, teamId, role, profileName }) {
   const uid = session.user.id;
@@ -64,8 +64,10 @@ export function createPlatform(sb, { session, teamId, role, profileName }) {
         id,
         async get() { await ensure(col); return docSnap(col, id); },
         async set(data) {
-          const { error } = await sb.from('docs').upsert({ scope, col, id, data });
-          if (error) throw fail(error); put(col, id, structuredClone(data));
+          // the database fills in some fields itself (who sent it, the seller, rounded locations), so keep its version
+          const q = sb.from('docs').upsert({ scope, col, id, data });
+          const { data: row, error } = col === 'reports' ? await q : await q.select('data').maybeSingle();  // reports are write-only
+          if (error) throw fail(error); put(col, id, row && row.data ? row.data : structuredClone(data));
         },
         async update(patch) {
           const { error } = await sb.rpc('doc_update', { p_scope: scope, p_col: col, p_id: id, patch });
@@ -108,6 +110,23 @@ export function createPlatform(sb, { session, teamId, role, profileName }) {
 
   return {
     teamId,
+    markSeen: thread => rpc('mark_thread_seen', { p_thread: thread }),
+    // listing photos live in Supabase Storage under <your id>/<listing id>/<file>
+    photos: {
+      url: path => sb.storage.from('listing-photos').getPublicUrl(path).data.publicUrl,
+      async upload(path, blob) {
+        const { error } = await sb.storage.from('listing-photos').upload(path, blob, { contentType: blob.type || 'image/jpeg', upsert: false, cacheControl: '31536000' });
+        if (error) { const e = new Error(error.message); e.userMessage = /exceed|size/i.test(error.message) ? 'That photo is too big.' : /policy|security/i.test(error.message) ? 'You’ve reached the photo limit. Delete an old listing first.' : 'A photo didn’t upload. Try again.'; throw e; }
+      },
+      async remove(paths) { if (paths.length) await sb.storage.from('listing-photos').remove(paths); },
+      async removeAllMine() {
+        const { data: folders } = await sb.storage.from('listing-photos').list(uid, { limit: 1000 });
+        for (const f of folders || []) {
+          const { data: files } = await sb.storage.from('listing-photos').list(`${uid}/${f.name}`, { limit: 100 });
+          if (files && files.length) await sb.storage.from('listing-photos').remove(files.map(x => `${uid}/${f.name}/${x.name}`));
+        }
+      },
+    },
     claimPlayer: async pid => { await rpc('claim_player', { p_team: teamId, p_player: pid }); await refetch('players'); },
     unclaimPlayer: async pid => { await rpc('unclaim_player', { p_team: teamId, p_player: pid }); await refetch('players'); },
     use: async name => (name === 'db' ? db : name === 'user' ? user : null),

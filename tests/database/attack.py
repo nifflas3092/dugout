@@ -152,5 +152,69 @@ expect('last member leaving deletes the team and its data', True, f"delete from 
 ok, out, _ = sql(f"select (select count(*) from teams where id='{T2}') + (select count(*) from docs where scope='{T2}')")
 expect('...team gone', True, 'select 1', None, lambda o: out == '0')
 
+print('\n-- gear marketplace')
+for k in ['seller', 'buyer', 'snoop']:
+    U[k] = str(uuid.uuid5(uuid.NAMESPACE_DNS, k)); sql(f"insert into auth.users(id,email) values ('{U[k]}','{k}@x.com')")
+L = {'title': 'Easton Ghost 34/26', 'cat': 'bat', 'cond': 'good', 'price': 180, 'cert': 'usa', 'desc': 'Barely used', 'area': 'Etobicoke, Toronto', 'lat': 43.65432, 'lng': -79.5123,
+     'photos': [f"{U['seller']}/L1/a1.jpg"], 'status': 'active'}
+expect('anyone signed in can list gear (no team needed); location rounded; seller stamped', True,
+       f"insert into docs(scope,col,id,data) values ('global','listings','L1',{j(L)}) returning data::text", 'seller',
+       lambda o: '43.65,' in o.replace(' ', '') and U['seller'] in o)
+expect('anon cannot see listings', False, "select count(*) from docs where col='listings'", 'anon')
+expect('signed-in users see listings', True, "select count(*) from docs where col='listings'", 'snoop', lambda o: o == '1')
+expect('listing photo pointing at someone else\'s folder rejected', False,
+       f"insert into docs(scope,col,id,data) values ('global','listings','L2',{j({**L, 'photos': [U['buyer'] + '/L2/x.jpg']})})", 'seller')
+expect('listing photo as an outside URL rejected', False,
+       f"insert into docs(scope,col,id,data) values ('global','listings','L2',{j({**L, 'photos': ['https://evil.example/track.gif']})})", 'seller')
+expect('more than 4 photos rejected', False,
+       f"insert into docs(scope,col,id,data) values ('global','listings','L2',{j({**L, 'photos': [U['seller'] + f'/L2/p{i}.jpg' for i in range(5)]})})", 'seller')
+expect('script in category rejected', False, f"insert into docs(scope,col,id,data) values ('global','listings','L2',{j({**L, 'photos': [], 'cat': '<img onerror=x>'})})", 'seller')
+expect('silly price rejected', False, f"insert into docs(scope,col,id,data) values ('global','listings','L2',{j({**L, 'photos': [], 'price': -5})})", 'seller')
+expect('someone else cannot edit the listing', True, f"update docs set data=data||'{{\"price\":1}}' where id='L1' returning 1", 'buyer', lambda o: o == '')
+expect('someone else cannot delete the listing', True, f"delete from docs where id='L1' returning 1", 'buyer', lambda o: o == '')
+expect('seller marks it sold', True, f"select public.doc_update('global','listings','L1','{{\"status\":\"sold\"}}')", 'seller')
+sql(f"select public.doc_update('global','listings','L1','{{\"status\":\"active\"}}')", 'seller')
+
+print('\n-- marketplace messages')
+expect('seller cannot open a conversation with themselves', False, f"insert into docs(scope,col,id,data) values ('global','threads','L1_{U['seller']}',{j({'listing':'L1'})})", 'seller')
+expect('buyer cannot pretend to be someone else', False, f"insert into docs(scope,col,id,data) values ('global','threads','L1_{U['snoop']}',{j({'listing':'L1','buyer':U['snoop']})})", 'buyer')
+expect('buyer opens conversation; seller and title come from the listing', True,
+       f"insert into docs(scope,col,id,data) values ('global','threads','L1_{U['buyer']}',{j({'listing':'L1','seller':U['snoop'],'title':'fake'})}) returning data::text", 'buyer',
+       lambda o: U['seller'] in o and 'Easton Ghost' in o and U['snoop'] not in o)
+TH = f"L1_{U['buyer']}"
+expect('buyer sends a message; sender is stamped', True, f"insert into docs(scope,col,id,data) values ('global','messages','m1',{j({'thread':TH,'text':'Still available?','from':U['seller']})}) returning data->>'from'", 'buyer', lambda o: o == U['buyer'])
+expect('seller replies', True, f"insert into docs(scope,col,id,data) values ('global','messages','m2',{j({'thread':TH,'text':'Yes! Saturday?'})})", 'seller')
+expect('conversation summary updated by the database', True, f"select data->>'last' from docs where id='{TH}'", 'buyer', lambda o: o == 'Yes! Saturday?')
+expect('outsider cannot see the conversation', True, "select count(*) from docs where col in ('threads','messages')", 'snoop', lambda o: o == '0')
+expect('outsider cannot post into it', False, f"insert into docs(scope,col,id,data) values ('global','messages','m3',{j({'thread':TH,'text':'hi'})})", 'snoop')
+expect('messages cannot be edited', True, f"update docs set data=data||'{{\"text\":\"changed\"}}' where id='m1' returning 1", 'buyer', lambda o: o == '')
+expect('buyer cannot change who is in the conversation', True, f"update docs set data=data||{j({'seller':U['snoop']})} where id='{TH}' returning 1", 'buyer', lambda o: o == '')
+expect('mark as read works for a participant', True, f"select public.mark_thread_seen('{TH}')", 'seller')
+expect('mark as read refused for an outsider', False, f"select public.mark_thread_seen('{TH}')", 'snoop')
+expect('message flood stopped', False, f"insert into docs(scope,col,id,data) select 'global','messages','f'||g,jsonb_build_object('thread','{TH}','text','spam') from generate_series(1,70) g", 'buyer')
+
+print('\n-- reports')
+expect('report a listing', True, f"insert into docs(scope,col,id,data) values ('global','reports','r1',{j({'listing':'L1','reason':'scam','note':'asked for e-transfer first'})})", 'snoop')
+expect('reports are not readable through the app, even by the reporter', True, "select count(*) from docs where col='reports'", 'snoop', lambda o: o == '0')
+expect('report with made-up reason rejected', False, f"insert into docs(scope,col,id,data) values ('global','reports','r2',{j({'listing':'L1','reason':'<x>'})})", 'snoop')
+
+print('\n-- listing photos (storage)')
+sql("insert into storage.buckets(id,name) values ('listing-photos','listing-photos') on conflict do nothing")
+expect('upload into own folder', True, f"insert into storage.objects(bucket_id,name) values ('listing-photos','{U['seller']}/L1/a1.jpg')", 'seller')
+expect('upload into someone else\'s folder refused', False, f"insert into storage.objects(bucket_id,name) values ('listing-photos','{U['buyer']}/L1/a1.jpg')", 'seller')
+expect('non-image file name refused', False, f"insert into storage.objects(bucket_id,name) values ('listing-photos','{U['seller']}/L1/evil.html')", 'seller')
+expect('cannot delete someone else\'s photo', True, f"delete from storage.objects where name like '{U['seller']}/%' returning 1", 'buyer', lambda o: o == '')
+sql(';'.join(f"insert into storage.objects(bucket_id,name) values ('listing-photos','{U['seller']}/L9/p{g}.jpg')" for g in range(59)), 'seller')  # uploads arrive one per request
+expect('photo cap: 61st photo refused', False, f"insert into storage.objects(bucket_id,name) values ('listing-photos','{U['seller']}/L9/last.jpg')", 'seller')
+expect('anon cannot upload', False, f"insert into storage.objects(bucket_id,name) values ('listing-photos','x/y/z.jpg')", 'anon')
+
+print('\n-- weather / rain-outs')
+expect('team home location is rounded to about 1 km', True, f"select public.doc_update('{T}','team','info','{{\"lat\":43.65432,\"lng\":-79.51234,\"place\":\"Etobicoke\"}}'); select data->>'lat' from docs where scope='{T}' and col='team'", None, lambda o: True)
+
+print('\n-- account deletion clears marketplace conversations')
+expect('buyer deletes account', True, "select public.delete_my_account()", 'buyer')
+ok, out, _ = sql(f"select count(*) from docs where col in ('threads','messages') and (id='{TH}' or data->>'thread'='{TH}')")
+expect('...conversation and both sides\' messages gone', True, 'select 1', None, lambda o: out == '0')
+
 print(f'\n{sum(results)}/{len(results)} passed')
 sys.exit(0 if all(results) else 1)
