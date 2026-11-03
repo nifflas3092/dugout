@@ -31,6 +31,14 @@ About 75 checks of the lineup builder against each league's rules, using realist
 node tests/rules.test.mjs
 ```
 
+## Scorecard engine (`tests/scorecard.test.mjs`)
+
+Checks what each play does to the bases, outs and runs: forced runners on walks, sac flies, double plays, fielder's choices, a third out made on a force, the run limit, and OttawaSoftball's 2-base walk.
+
+```
+node tests/scorecard.test.mjs
+```
+
 ## Click-through test (`tests/e2e`)
 
 Signs in, creates a team, invites a player, RSVPs, posts, signs up a sub, sends and accepts a request, and deletes an account. It runs in a real browser (Playwright), against an in-browser stand-in for Supabase. It also fails if the Content Security Policy blocks anything.

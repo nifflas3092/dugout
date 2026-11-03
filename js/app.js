@@ -1,6 +1,7 @@
 /* Dugout team app. The screens and logic; data access comes from ./platform.js */
 import { forecast, outlook, CREDIT } from './weather.js';
 import { renderGear, unreadCount, gearBusy } from './market.js';
+import { PLAYS, REACHED, OUTS, POS_NUM, code as playCode, defaultAdvance, applyPlay, defaultRBI, outsOn, pathFor, diamondSVG } from './scorecard.js';
 import { RULESETS, POS_NAME as RULE_POS_NAME, rulesFor, buildLineupFor, batterAt, lineupPlayers, lineupProblems, availabilityCheck, gameClock } from './rules.js';
 export function startApp(platform) {
 /* ---------- state ---------- */
@@ -10,11 +11,6 @@ const RULES = () => rulesFor(st.team);          // the team's league rules (Team
 const FPOS = () => RULES().pos;                // fielding positions under those rules
 const GENDER = { m: 'Man', w: 'Woman', x: 'Non-binary' };
 const slotLabel = (L, slot) => slot && slot[0] === '~' ? `${slot[1] === 'w' ? 'Women' : 'Men'}’s spot ↻ (${((L.rot || {})[slot[1]] || []).map(pName).join(', ')})` : pName(slot);
-const RESULTS = [
-  { k: '1B', label: 'Single', cls: 'hit' }, { k: '2B', label: 'Double', cls: 'hit' }, { k: '3B', label: 'Triple', cls: 'hit' }, { k: 'HR', label: 'Home run', cls: 'hit' },
-  { k: 'BB', label: 'Walk' }, { k: 'E', label: 'Reached on error' }, { k: 'SF', label: 'Sac fly' },
-  { k: 'OUT', label: 'Out', cls: 'outy' }, { k: 'K', label: 'Strikeout', cls: 'outy' },
-];
 const st = { listings: [], threads: [], messages: [], contacts: {}, agents: [], diamonds: [], invites: [], team: null, players: [], games: [], rsvp: {}, ab: [], posts: [], loaded: { team: false, players: false, games: false }, canEdit: false, canWrite: false, offline: false };
 let db = null, user = null;
 const view = document.getElementById('view');
@@ -538,26 +534,24 @@ function gamePicker(gid) {
 function bindPicker() { const s = document.getElementById('gamePick'); if (s) s.addEventListener('change', () => { selGame = s.value; LS.set('game', selGame); render(); }); }
 
 /* --- Scorekeeper --- */
-let rbi = 0, scorers = [];   // runs on the play being entered, and which runners crossed the plate
+let pend = null;   // the play being entered: { r, fielders, adv, rbi }
 function renderScore() {
   const gid = defaultGame(), g = st.games.find(x => x.id === gid);
   if (!g) { view.innerHTML = `<h2>Score</h2><div class="panel empty">Add a game first.</div>`; return; }
+  if (pend && pend.g !== g.id) pend = null;
   const innings = Math.max((st.team?.innings || 7), (g.us || []).length, (g.them || []).length, g.inning || 1);
   const abs = st.ab.filter(a => a.g === g.id).sort((a, b) => a.at - b.at);
   const order = g.lineup ? g.lineup.order : st.players.filter(p => rsvpOf(g.id, p.id) === 'in').map(p => p.id);
-  const batter = order.length ? batterAt(g.lineup, g.bi || 0, order) : null, onDeck = order.length > 1 ? batterAt(g.lineup, (g.bi || 0) + 1, order) : null;
+  const bi = g.bi || 0, batter = order.length ? batterAt(g.lineup, bi, order) : null, onDeck = order.length > 1 ? batterAt(g.lineup, bi + 1, order) : null;
   const final = g.status === 'final', keep = st.canEdit && !final;
   const cell = (arr, i) => arr && arr[i] != null ? arr[i] : '';
   const nowInn = g.inning || 1, innAbs = abs.filter(a => a.inn === nowInn);
-  const outs = innAbs.filter(a => ['OUT', 'K', 'SF'].includes(a.r)).length;
-  // who could score: anyone who reached base this inning and hasn't scored yet, newest first, then the batter
-  const scoredThisInn = new Set(innAbs.flatMap(a => a.scored || []));
-  const onBase = [...new Set(innAbs.filter(a => ['1B', '2B', '3B', 'BB', 'E'].includes(a.r)).map(a => a.p).reverse())].filter(p => !scoredThisInn.has(p));
+  const outs = Math.min(3, innAbs.reduce((n, a) => n + outsOn(a), 0));
+  const bases = { 1: null, 2: null, 3: null, ...(g.bases || {}) };
   const box = boxScore(abs);
-  // league-rule helpers: run limit, mercy, home-run limit, game clock, walk rule
+  // league rules: run limit, mercy, home-run limit, game clock, walk rule
   const rules = RULES(), gOf = id => (st.players.find(p => p.id === id) || {}).g, nInn = st.team?.innings || 7;
   const usInn = +((g.us || [])[nowInn - 1] || 0), lastInn = nowInn >= nInn, cap = rules.runCap && !lastInn ? rules.runCap : 0;
-  const capHit = cap && usInn >= cap;
   const lead = sum(g.us) - sum(g.them), mercy = rules.mercy && nowInn > rules.mercy.after && Math.abs(lead) >= rules.mercy.lead;
   const themHR = g.themHR || { m: 0, w: 0, t: 0 }, ourHR = abs.filter(a => a.r === 'HR');
   const hrNote = (() => {
@@ -569,7 +563,56 @@ function renderScore() {
   })();
   const clock = gameClock(g.date, g.time, rules), hhmm = t => new Date(t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   const twoBases = rules.walkOnDeck && onDeck && gOf(onDeck) === 'w';
-  view.innerHTML = `<h2>${final ? 'Box score' : 'Keep score'}</h2>
+  const posNum = rules.id === 'ossc' ? { ...POS_NUM, CF: 8, RF: 9, ROV: 10 } : POS_NUM;
+
+  // ---- the play being entered
+  let sheet = '';
+  if (keep && pend && batter) {
+    const play = PLAYS[pend.r], runners = [3, 2, 1].filter(b => bases[b]).map(b => ({ id: bases[b], from: b }));
+    const res = applyPlay({ bases, outs }, pend.adv, pend.r, { runCap: cap, runsSoFar: usInn });
+    const people = [{ id: batter, from: 0 }, ...runners];
+    const spot = b => ['Out', '1st', '2nd', '3rd', 'Home'][b];
+    sheet = `<div class="play-sheet" role="group" aria-label="${esc(play.label)} by ${esc(pName(batter))}">
+      <h3>${esc(play.label)} by ${esc(pName(batter))}</h3>
+      ${play.fielders ? `<div><span class="small muted">Who fielded it? <span class="muted">(optional, in order)</span></span><div class="row" style="margin-top:6px">${rules.pos.map(k => `<button type="button" class="chip-btn" data-fld="${esc(k)}" aria-pressed="${pend.fielders.includes(k)}">${posNum[k] || ''} ${esc(k)}</button>`).join('')}</div></div>` : ''}
+      <div class="small muted" style="margin-top:4px">Where did everyone end up?</div>
+      ${people.map(pp => `<div class="adv-row"><span class="grow"><b>${esc(pName(pp.id))}</b> <span class="muted small">${pp.from ? 'was on ' + spot(pp.from) : 'batter'}</span></span>
+        <div class="seg adv-seg">${[0, 1, 2, 3, 4].filter(b => b === 0 || b >= pp.from).map(b => `<button type="button" data-adv="${esc(pp.id)}" data-b="${b}" aria-pressed="${pend.adv[pp.id] === b}">${spot(b)}</button>`).join('')}</div></div>`).join('')}
+      <div class="play-sum">${res.problem ? `<span class="err">${esc(res.problem)}</span>` : `<b>${res.runs ? `${res.runs} run${res.runs > 1 ? 's' : ''} score${res.runs > 1 ? '' : 's'}` : 'No runs'}</b>${res.outsAdded ? `, ${res.outsAdded} out${res.outsAdded > 1 ? 's' : ''}` : ''}${res.capped ? `. That’s the ${cap}-run limit: side retired` : res.sideRetired ? '. Side retired' : ''}`}
+        ${res.runs ? `<span class="row" style="gap:6px;margin-left:auto">RBI <button class="iconbtn" type="button" data-rbi="-1" aria-label="One fewer RBI">−</button><output>${pend.rbi}</output><button class="iconbtn" type="button" data-rbi="1" aria-label="One more RBI">+</button></span>` : ''}</div>
+      <div class="row"><button class="btn cta" type="button" id="savePlay" ${res.problem ? 'disabled' : ''}>Record play</button><button class="btn ghost" type="button" id="cancelPlay">Cancel</button></div>
+    </div>`;
+  }
+
+  // ---- the scorecard grid: a row per batting spot, a box per inning
+  const len = order.length, rows = order.map((slot, i) => ({ slot, i }));
+  const slotOf = a => a.bi != null && len ? a.bi % len : Math.max(0, order.indexOf(a.p));
+  const cellsFor = (i, inn) => abs.filter(a => a.inn === inn && slotOf(a) === i);
+  const curSlot = len ? bi % len : -1;
+  const outNoOf = a => { let n = 0; for (const x of abs.filter(y => y.inn === a.inn)) { if (x === a) return (x.adv ? x.adv[x.p] === 0 : PLAYS[x.r] && PLAYS[x.r].out) ? Math.min(3, n + 1) : 0; n += outsOn(x); } return 0; };
+  const boxHtml = a => { const later = abs.filter(x => x.inn === a.inn && x.at > a.at); return `<div class="sc-ab" title="${esc(pName(a.p))}: ${esc((PLAYS[a.r] || {}).label || a.r)}${a.rbi ? `, ${a.rbi} RBI` : ''}">${diamondSVG(pathFor(a, later), esc(playCode(a, posNum)), outNoOf(a), a.rbi || 0)}</div>`; };
+  const totals = i => { const mine = abs.filter(a => slotOf(a) === i); const R = abs.reduce((n, a) => n + (a.scored || []).filter(p => mine.some(m => m.p === p)).length, 0);
+    return { AB: mine.filter(a => !['BB', 'SF'].includes(a.r)).length, R, H: mine.filter(a => ['1B', '2B', '3B', 'HR'].includes(a.r)).length, RBI: mine.reduce((n, a) => n + (a.rbi || 0), 0) }; };
+  const grid = len ? `<div class="sc-wrap"><table class="scorecard"><thead><tr><th scope="col" class="sc-name">Batter</th>${Array.from({ length: innings }, (_, k) => `<th scope="col"${k + 1 === nowInn && !final ? ' class="sc-now"' : ''}>${k + 1}</th>`).join('')}<th scope="col">AB</th><th scope="col">R</th><th scope="col">H</th><th scope="col">RBI</th></tr></thead>
+    <tbody>${rows.map(({ slot, i }) => { const t = totals(i); return `<tr${i === curSlot && keep ? ' class="sc-up"' : ''}><th scope="row" class="sc-name"><span class="sc-n">${i + 1}</span>${esc(slot[0] === '~' ? (slot[1] === 'w' ? 'Women’s spot ↻' : 'Men’s spot ↻') : pName(slot))}</th>
+      ${Array.from({ length: innings }, (_, k) => { const list = cellsFor(i, k + 1), now = keep && i === curSlot && k + 1 === nowInn;
+        return `<td class="sc-cell${now ? ' sc-cur' : ''}">${list.map(boxHtml).join('')}${now && !list.length ? '<span class="sc-up-tag">Up</span>' : ''}</td>`; }).join('')}
+      <td class="num">${t.AB}</td><td class="num">${t.R}</td><td class="num">${t.H}</td><td class="num">${t.RBI}</td></tr>`; }).join('')}</tbody>
+    <tfoot><tr><th scope="row" class="sc-name">Runs</th>${Array.from({ length: innings }, (_, k) => `<td class="num">${cell(g.us, k)}</td>`).join('')}<td colspan="4" class="num"><b>${sum(g.us)}</b></td></tr>
+    <tr><th scope="row" class="sc-name">Hits</th>${Array.from({ length: innings }, (_, k) => `<td class="num">${abs.filter(a => a.inn === k + 1 && ['1B', '2B', '3B', 'HR'].includes(a.r)).length || ''}</td>`).join('')}<td colspan="4"></td></tr></tfoot></table></div>
+    <p class="muted small sc-key">Numbers are fielders (${rules.pos.map(k => `${posNum[k]} ${k}`).join(', ')}). F fly, L line, P pop, K strikeout, E error, FC fielder’s choice, SF sac fly, DP double play. The diamond fills in when the runner scores; ✕ marks where they were put out; dots are RBIs.</p>`
+    : `<p class="muted">Build a lineup, or mark players In on the Games tab, to start the scorecard.</p>`;
+
+  // ---- live field: bases, outs, who's up
+  const field = `<div class="live">
+    <svg viewBox="0 0 120 110" class="live-dia" aria-hidden="true"><path d="M60 100 L105 55 L60 10 L15 55 Z" class="ld-in"/>${[[105, 55, 1], [60, 10, 2], [15, 55, 3]].map(([x, y, b]) => `<rect x="${x - 8}" y="${y - 8}" width="16" height="16" transform="rotate(45 ${x} ${y})" class="ld-base${bases[b] ? ' on' : ''}"/>`).join('')}<path d="M54 94 h12 v6 l-6 6 l-6 -6z" class="ld-home"/></svg>
+    <div class="live-txt">
+      <div class="small muted">Inning ${esc(nowInn)}${lastInn ? ' (last)' : ''} · <span class="outs" aria-label="${outs} out${outs === 1 ? '' : 's'}">${[0, 1, 2].map(i => `<span class="${i < outs ? 'on' : ''}"></span>`).join('')}</span> ${outs} out${outs === 1 ? '' : 's'}</div>
+      <div class="atbat">${batter ? esc(pName(batter)) : 'No lineup'}</div>${onDeck ? `<div class="muted small">On deck: ${esc(pName(onDeck))}</div>` : ''}
+      <div class="small live-runners">${[1, 2, 3].filter(b => bases[b]).map(b => `<span>${['', '1st', '2nd', '3rd'][b]}: <b>${esc(pName(bases[b]))}</b></span>`).join('') || '<span class="muted">Bases empty</span>'}</div>
+    </div></div>`;
+
+  view.innerHTML = `<h2>${final ? 'Box score' : 'Scorecard'}</h2>
   ${gamePicker(gid)}
   <div class="panel">
     <div class="scoreboard"><span class="vs">${esc(st.team?.name || 'Us')}</span><span class="big" aria-label="Our runs">${sum(g.us)}</span><span class="vs">${esc(g.opp)}</span><span class="big" aria-label="Their runs">${sum(g.them)}</span></div>
@@ -577,14 +620,8 @@ function renderScore() {
     <tbody><tr><th scope="row">Us</th>${Array.from({ length: innings }, (_, i) => `<td>${cell(g.us, i)}</td>`).join('')}<td><b>${sum(g.us)}</b></td></tr>
     <tr><th scope="row">Them</th>${Array.from({ length: innings }, (_, i) => `<td>${cell(g.them, i)}</td>`).join('')}<td><b>${sum(g.them)}</b></td></tr></tbody></table></div>
   </div>
-  ${box.length ? `<h3 style="margin-top:16px">${esc(st.team?.name || 'Our')} box score</h3>
-  <div class="lineup-scroll"><table><thead><tr><th scope="col">Batter</th>${['AB', 'R', 'H', 'RBI', 'BB', 'HR'].map(k => `<th scope="col" class="num">${k}</th>`).join('')}</tr></thead>
-  <tbody>${box.map(r => `<tr><td><b>${esc(pName(r.p))}</b></td>${['AB', 'R', 'H', 'RBI', 'BB', 'HR'].map(k => `<td class="num">${r[k]}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : ''}
-  ${keep ? `
-  <div class="panel" style="margin-top:12px">
-    <div class="row"><div class="grow"><div class="muted small">Inning ${esc(nowInn)} · <span class="outs" aria-label="${outs} out${outs === 1 ? '' : 's'}">${[0, 1, 2].map(i => `<span class="${i < outs ? 'on' : ''}"></span>`).join('')}</span> ${Math.min(outs, 3)} out${outs === 1 ? '' : 's'} · now batting</div><div class="atbat">${batter ? esc(pName(batter)) : 'No lineup'}</div>${onDeck ? `<div class="muted small">On deck: ${esc(pName(onDeck))}</div>` : ''}</div></div>
-    ${batter ? `<div class="row"><span class="grow small"><b>Runs scored on this play</b></span><div class="stepper"><button class="iconbtn" type="button" id="rbiM" aria-label="One fewer run">−</button><output id="rbiV" aria-live="polite">${rbi}</output><button class="iconbtn" type="button" id="rbiP" aria-label="One more run">+</button></div></div>
-    <div id="scorers"></div>
+  ${keep ? `<div class="panel" style="margin-top:12px">
+    ${field}
     ${rules.coed || rules.runCap ? `<div class="rule-notes small">
       ${clock ? `<span class="${clock.pastLastNew ? 'hot' : ''}">⏱ ${clock.pastLastNew ? `<b>Past ${esc(hhmm(clock.lastNew))}: don’t start a new inning</b>` : `No new inning after ${esc(hhmm(clock.lastNew))}`} · ends ${esc(hhmm(clock.end))}</span>` : ''}
       ${cap ? `<span>Run limit ${cap} an inning: ${usInn}/${cap} this inning</span>` : rules.runCap ? '<span>Last inning: no run limit</span>' : ''}
@@ -592,55 +629,64 @@ function renderScore() {
       ${rules.offensePitcher && g.lineup && g.lineup.pitcher ? `<span>Pitching for us: <b>${esc(pName(g.lineup.pitcher))}</b></span>` : ''}
       ${rules.hr ? `<span>HR ${rules.hr.byGender ? `men ${ourHR.filter(a => gOf(a.p) === 'm').length}–${themHR.m || 0}, women ${ourHR.filter(a => gOf(a.p) === 'w').length}–${themHR.w || 0}` : `${ourHR.length}–${themHR.t || 0}`} (+${rules.hr.plus} rule)</span>` : ''}
     </div>` : ''}
-    ${capHit ? `<p class="notice small" style="margin:8px 0" role="alert"><b>${cap}-run limit reached.</b> The side is retired: tap <b>Next inning</b>.</p>` : ''}
     ${mercy ? `<p class="notice small" style="margin:8px 0" role="alert"><b>Mercy rule:</b> a ${rules.mercy.lead}-run lead after the ${ordinal(rules.mercy.after)}${rules.mercy.optional ? '. The losing team can call the game or keep playing' : '. The game is over'}.</p>` : ''}
     ${hrNote ? `<p class="notice small" style="margin:8px 0">${esc(hrNote)}</p>` : ''}
     ${twoBases ? `<p class="muted small" style="margin:6px 0">Woman on deck: a walk is <b>2 bases</b> and she must bat.</p>` : ''}
-    ${outs >= 3 ? `<p class="notice small" style="margin:8px 0">Three outs. Tap <b>Next inning</b> when the side is retired.</p>` : ''}
-    <div class="result-grid">${RESULTS.map(r => `<button type="button" class="${esc(r.cls || '')}" data-res="${esc(r.k)}">${r.k === 'BB' && twoBases ? 'Walk (2 bases)' : r.label}</button>`).join('')}</div>` : `<p class="muted">Build a lineup first, or mark players In on the Games tab.</p>`}
+    ${sheet || (batter ? `<div class="play-pick"><div class="small muted">Reached base</div><div class="result-grid">${REACHED.map(k => `<button type="button" class="hit" data-play="${k}">${k === 'BB' && twoBases ? 'Walk (2 bases)' : PLAYS[k].label}</button>`).join('')}</div>
+      <div class="small muted">Out</div><div class="result-grid">${OUTS.map(k => `<button type="button" class="outy" data-play="${k}"${(k === 'SF' && !bases[3]) || (k === 'DP' && !(bases[1] || bases[2] || bases[3])) || (k === 'DP' && outs > 1) ? ' disabled' : ''}>${PLAYS[k].label}</button>`).join('')}</div></div>` : `<p class="muted">Build a lineup first, or mark players In on the Games tab.</p>`)}
     <div class="row">
       <button class="btn ghost small" type="button" id="themM" aria-label="Take a run off their score this inning">Them −1</button>
       <button class="btn ghost small" type="button" id="themP">Them +1 run</button>
-      <button class="btn ${outs >= 3 || capHit ? 'cta' : 'ghost'} small" type="button" id="nextInn">Next inning</button>
+      <button class="btn ghost small" type="button" id="nextInn">Next inning</button>
       ${rules.hr ? (rules.hr.byGender ? `<button class="btn ghost small" type="button" data-themhr="m">Their HR (man)</button><button class="btn ghost small" type="button" data-themhr="w">Their HR (woman)</button>` : `<button class="btn ghost small" type="button" data-themhr="t">Their HR</button>`) : ''}
-      <button class="btn ghost small" type="button" id="undo" ${abs.length ? '' : 'disabled'}>Undo last at-bat</button>
+      <button class="btn ghost small" type="button" id="undo" ${abs.length ? '' : 'disabled'}>Undo last play</button>
       <button class="btn small" type="button" id="finish">Final</button>
     </div>
   </div>` : final && st.canEdit ? `<div class="row" style="margin-top:12px"><button class="btn ghost small" id="reopen" type="button">Reopen game</button></div>` : ''}
-  <h3 style="margin-top:18px">At-bats</h3>
-  ${abs.length ? `<div class="lineup-scroll"><table><thead><tr><th scope="col">Inn</th><th scope="col">Batter</th><th scope="col">Result</th><th scope="col" class="num">Runs in</th></tr></thead><tbody>${abs.slice().reverse().map(a => `<tr><td>${a.inn}</td><td>${esc(pName(a.p))}</td><td>${esc((RESULTS.find(r => r.k === a.r) || {}).label || a.r)}</td><td class="num">${a.rbi || ''}</td></tr>`).join('')}</tbody></table></div>` : `<p class="muted">No at-bats recorded for this game.</p>`}`;
+  <h3 style="margin-top:18px">Scorecard</h3>
+  ${grid}
+  ${box.length ? `<h3 style="margin-top:16px">${esc(st.team?.name || 'Our')} box score</h3>
+  <div class="lineup-scroll"><table><thead><tr><th scope="col">Batter</th>${['AB', 'R', 'H', 'RBI', 'BB', 'HR'].map(k => `<th scope="col" class="num">${k}</th>`).join('')}</tr></thead>
+  <tbody>${box.map(r => `<tr><td><b>${esc(pName(r.p))}</b></td>${['AB', 'R', 'H', 'RBI', 'BB', 'HR'].map(k => `<td class="num">${r[k]}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : ''}`;
   bindPicker();
+  const curCell = view.querySelector('.sc-cur'); if (curCell) curCell.scrollIntoView({ block: 'nearest', inline: 'center' });
   if (!keep) { const ro = document.getElementById('reopen'); if (ro) ro.onclick = () => write(() => db.doc('games/' + g.id).update({ status: 'live' }), 'Game reopened'); return; }
-  const inn = (g.inning || 1) - 1, setArr = (arr, d) => { const a = [...(arr || [])]; while (a.length <= inn) a.push(0); a[inn] = Math.max(0, (+a[inn] || 0) + d); return a; };
-  // pick which runners crossed the plate (as many as runs on the play)
-  const drawScorers = () => {
-    const box = document.getElementById('scorers'); if (!box) return;
-    scorers = scorers.filter(p => onBase.includes(p) || p === batter).slice(0, rbi);
-    if (!rbi) { box.innerHTML = ''; return; }
-    const who = [...onBase, ...(batter && !onBase.includes(batter) ? [batter] : [])];
-    box.innerHTML = `<fieldset class="scorers"><legend class="small"><b>Who scored?</b> <span class="muted">(pick ${rbi}, or skip)</span></legend><div class="row">${who.map(p => `<button type="button" class="chip-btn" data-scorer="${esc(p)}" aria-pressed="${scorers.includes(p)}">${esc(pName(p))}${p === batter ? ' (batter)' : ''}</button>`).join('') || '<span class="muted small">No one on base yet this inning.</span>'}</div></fieldset>`;
-    box.querySelectorAll('[data-scorer]').forEach(b => b.onclick = () => { const p = b.dataset.scorer; scorers = scorers.includes(p) ? scorers.filter(x => x !== p) : scorers.length < rbi ? [...scorers, p] : [...scorers.slice(1), p]; drawScorers(); });
+  const inn = nowInn - 1, setArr = (arr, d, at = inn) => { const a = [...(arr || [])]; while (a.length <= at) a.push(0); a[at] = Math.max(0, (+a[at] || 0) + d); return a; };
+
+  // choose a play, adjust, record
+  view.querySelectorAll('[data-play]').forEach(b => b.onclick = () => {
+    const r = b.dataset.play, adv = defaultAdvance(r, bases, batter, { walkTwo: r === 'BB' && twoBases });
+    const res = applyPlay({ bases, outs }, adv, r, { runCap: cap, runsSoFar: usInn });
+    pend = { g: g.id, r, fielders: [], adv, rbi: defaultRBI(r, res.runs) }; render();
+  });
+  view.querySelectorAll('[data-fld]').forEach(b => b.onclick = () => { const k = b.dataset.fld, max = pend.r === 'DP' ? 3 : pend.r === 'GO' ? 3 : 1;
+    pend.fielders = pend.fielders.includes(k) ? pend.fielders.filter(x => x !== k) : [...pend.fielders, k].slice(-max); render(); });
+  view.querySelectorAll('[data-adv]').forEach(b => b.onclick = () => { pend.adv = { ...pend.adv, [b.dataset.adv]: +b.dataset.b };
+    const res = applyPlay({ bases, outs }, pend.adv, pend.r, { runCap: cap, runsSoFar: usInn }); pend.rbi = defaultRBI(pend.r, res.runs); render(); });
+  view.querySelectorAll('[data-rbi]').forEach(b => b.onclick = () => { const res = applyPlay({ bases, outs }, pend.adv, pend.r, { runCap: cap, runsSoFar: usInn }); pend.rbi = Math.max(0, Math.min(res.runs, pend.rbi + +b.dataset.rbi)); render(); });
+  const cp = document.getElementById('cancelPlay'); if (cp) cp.onclick = () => { pend = null; render(); };
+  const sp = document.getElementById('savePlay');
+  if (sp) sp.onclick = async () => {
+    const res = applyPlay({ bases, outs }, pend.adv, pend.r, { runCap: cap, runsSoFar: usInn }); if (res.problem) return;
+    const adv = { ...pend.adv }; Object.keys(adv).forEach(pid => { if (adv[pid] === 4 && !res.scored.includes(pid)) adv[pid] = 3; });   // runs that didn't count
+    const before = { inning: nowInn, bi, bases, us: g.us || [], them: g.them || [] };
+    const upd = { bi: bi + 1, us: setArr(g.us, res.runs), bases: res.bases, status: 'live' };
+    if (res.sideRetired) { upd.inning = nowInn + 1; upd.them = setArr(g.them, 0, nowInn); upd.us = setArr(upd.us, 0, nowInn); }
+    const label = PLAYS[pend.r].label, play = { ...pend };
+    const ok = await write(async () => {
+      await db.doc('ab/' + uid()).set({ g: g.id, p: batter, r: play.r, fielders: play.fielders, adv, rbi: Math.min(play.rbi, res.runs), runs: res.runs, scored: res.scored, inn: nowInn, bi, at: Date.now(), before });
+      await db.doc('games/' + g.id).update(upd);
+    }, `${pName(batter)}: ${label}${res.runs ? `, ${res.runs} run${res.runs > 1 ? 's' : ''}` : ''}${res.sideRetired ? '. Side retired' : ''}`);
+    if (ok) { pend = null; render(); }
   };
   view.querySelectorAll('[data-themhr]').forEach(b => b.onclick = () => { const k = b.dataset.themhr, t = { m: 0, w: 0, t: 0, ...(g.themHR || {}) }; t[k]++; if (k !== 't') t.t++; write(() => db.doc('games/' + g.id).update({ themHR: t }), 'Their home run counted'); });
-  const rb = v => { rbi = Math.max(0, Math.min(cap ? Math.max(0, cap - usInn) : 4, rbi + v)); document.getElementById('rbiV').textContent = rbi; drawScorers(); };
-  drawScorers();
-  const m = document.getElementById('rbiM'); if (m) { m.onclick = () => rb(-1); document.getElementById('rbiP').onclick = () => rb(1); }
-  view.querySelectorAll('[data-res]').forEach(b => b.addEventListener('click', async () => {
-    const r = b.dataset.res, runs = r === 'HR' ? Math.max(1, rbi) : rbi;
-    let scored = scorers.slice(0, runs);
-    if (r === 'HR' && !scored.includes(batter)) scored = [...scored.slice(0, runs - 1), batter];   // the batter always scores on a homer
-    const ok = await write(async () => {
-      await db.doc('ab/' + uid()).set({ g: g.id, p: batter, r, rbi: r === 'E' ? 0 : runs, runs, scored, inn: g.inning || 1, at: Date.now() });
-      await db.doc('games/' + g.id).update({ bi: (g.bi || 0) + 1, us: setArr(g.us, runs), status: 'live' });
-    }, `${pName(batter)}: ${b.textContent}${runs ? `, ${runs} run${runs > 1 ? 's' : ''}` : ''}`);
-    if (ok) { rbi = 0; scorers = []; }
-  }));
   document.getElementById('themP').onclick = () => write(() => db.doc('games/' + g.id).update({ them: setArr(g.them, 1), status: 'live' }));
   document.getElementById('themM').onclick = () => write(() => db.doc('games/' + g.id).update({ them: setArr(g.them, -1) }));
-  document.getElementById('nextInn').onclick = () => write(() => db.doc('games/' + g.id).update({ inning: (g.inning || 1) + 1, us: setArr(g.us, 0), them: setArr(g.them, 0) }), `Inning ${(g.inning || 1) + 1}`);
-  document.getElementById('undo').onclick = () => { const last = abs[abs.length - 1]; if (!last) return;
+  document.getElementById('nextInn').onclick = () => { pend = null; write(() => db.doc('games/' + g.id).update({ inning: nowInn + 1, bases: { 1: null, 2: null, 3: null }, us: setArr(g.us, 0, nowInn), them: setArr(g.them, 0, nowInn) }), `Inning ${nowInn + 1}`); };
+  document.getElementById('undo').onclick = () => { const last = abs[abs.length - 1]; if (!last) return; pend = null;
+    if (last.before) return write(async () => { await db.doc('ab/' + last.id).delete(); await db.doc('games/' + g.id).update({ inning: last.before.inning, bi: last.before.bi, bases: last.before.bases, us: last.before.us, them: last.before.them }); }, 'Last play undone');
     const a = [...(g.us || [])]; a[last.inn - 1] = Math.max(0, (+a[last.inn - 1] || 0) - (last.runs || 0));
-    write(async () => { await db.doc('ab/' + last.id).delete(); await db.doc('games/' + g.id).update({ bi: Math.max(0, (g.bi || 0) - 1), us: a }); }, 'Last at-bat removed'); };
+    write(async () => { await db.doc('ab/' + last.id).delete(); await db.doc('games/' + g.id).update({ bi: Math.max(0, bi - 1), us: a }); }, 'Last play undone'); };
   const fin = document.getElementById('finish'); fin.onclick = () => confirmInline(fin, `Final: ${sum(g.us)}-${sum(g.them)}?`, () => write(() => db.doc('games/' + g.id).update({ status: 'final' }), 'Game final'));
 }
 

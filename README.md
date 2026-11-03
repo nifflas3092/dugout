@@ -13,7 +13,7 @@ Team app for rec league slowpitch:
 - **Team notice banner**: captains post a red or orange notice ("Games cancelled tonight: fields closed") at the top of everyone's app, optionally clearing itself at midnight
 - **Lineup sharing**: send the batting order and positions by inning to the team chat as text, or save it as an image
 - **Team messages**: one tap sends an RSVP reminder (with who hasn't answered), a rain-out notice or a makeup date to your team's WhatsApp or text group
-- **Scorekeeping**: outs per inning, who scored on each play, a per-game box score (AB, R, H, RBI, BB, HR) and season stats including runs
+- **Digital scorecard**: a scorebook grid (a row per batter, a box per inning) that fills in as you score. Tap the play (single, groundout, sac fly, double play…), optionally tap who fielded it, check where each runner ended up (Dugout moves them for you), and save. Runs, RBIs, outs and the side changing are worked out automatically, with standard notation (6-3, F8, K) and base paths drawn in each box. Undo is exact; box score and season stats update live
 - **Gear**: a used-equipment marketplace with photos, filters, and private messages between buyer and seller
 
 It's a plain website with no build step. People open it in a browser or add it to their home screen, where it works like an installed app. Data lives in [Supabase](https://supabase.com), a hosted Postgres database with sign-in. Hosting is free on Vercel or Netlify.

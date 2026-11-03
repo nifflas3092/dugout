@@ -1,0 +1,38 @@
+// Unit tests for js/scorecard.js: run with `node tests/scorecard.test.mjs`
+import { defaultAdvance, applyPlay, defaultRBI, pathFor, code, outsOn } from '../js/scorecard.js';
+let pass = 0, fail = 0;
+const ok = (name, cond, extra = '') => { if (cond) { pass++; console.log('PASS ' + name); } else { fail++; console.log('FAIL ' + name + (extra ? '   -> ' + JSON.stringify(extra) : '')); } };
+const B = (a, b, c) => ({ 1: a || null, 2: b || null, 3: c || null });
+const run = (play, bases, outs = 0, opts = {}) => { const adv = defaultAdvance(play, bases, 'bat', opts); return { adv, ...applyPlay({ bases, outs }, adv, play, opts) }; };
+
+let r = run('1B', B('a', null, 'c'));
+ok('single: everyone up one, runner from 3rd scores', r.bases[1] === 'bat' && r.bases[2] === 'a' && r.runs === 1 && r.scored[0] === 'c', r);
+r = run('2B', B('a', 'b'));
+ok('double: runner from 2nd scores, runner from 1st to 3rd', r.bases[2] === 'bat' && r.bases[3] === 'a' && r.runs === 1, r);
+r = run('HR', B('a', 'b', 'c'));
+ok('grand slam: 4 runs, bases empty', r.runs === 4 && !r.bases[1] && !r.bases[2] && !r.bases[3], r);
+r = run('BB', B(null, 'b'));
+ok('walk with runner on 2nd only: runner isn’t forced and stays', r.bases[1] === 'bat' && r.bases[2] === 'b' && r.runs === 0, r);
+r = run('BB', B('a', 'b', 'c'));
+ok('bases-loaded walk forces a run in', r.runs === 1 && r.bases[1] === 'bat' && r.bases[2] === 'a' && r.bases[3] === 'b', r);
+r = run('BB', B('a'), 0, { walkTwo: true });
+ok('OttawaSoftball walk with a woman on deck: batter to 2nd, runner from 1st forced to 3rd', r.bases[2] === 'bat' && r.bases[3] === 'a' && !r.bases[1], r);
+r = run('SF', B(null, null, 'c'), 1);
+ok('sac fly: run scores, batter out', r.runs === 1 && r.outs === 2, r);
+r = run('DP', B('a'), 0);
+ok('double play: two outs, bases empty', r.outs === 2 && !r.bases[1] && !r.bases[2], r);
+r = run('FC', B('a'));
+ok('fielder’s choice: lead runner out, batter on 1st', r.outs === 1 && r.bases[1] === 'bat', r);
+r = run('GO', B(null, null, 'c'), 2);
+ok('third out on a ground ball: run doesn’t count, side retired, bases cleared', r.sideRetired && r.runs === 0 && !r.bases[3], r);
+r = run('1B', B('a', 'b', 'c'), 0, { runCap: 6, runsSoFar: 5 });
+ok('run limit: only runs up to the cap count and the side is retired', r.runs === 1 && r.capped && r.sideRetired, r);
+const bad = applyPlay({ bases: B(), outs: 0 }, { x: 2, y: 2 }, '1B');
+ok('two runners on one base is caught', !!bad.problem);
+ok('RBI: none on errors or double plays', defaultRBI('E', 2) === 0 && defaultRBI('DP', 1) === 0 && defaultRBI('1B', 2) === 2);
+ok('scorebook codes: 6-3, F8, K, E5', code({ r: 'GO', fielders: ['SS', '1B'] }) === '6-3' && code({ r: 'FO', fielders: ['LCF'] }) === 'F8' && code({ r: 'K' }) === 'K' && code({ r: 'E', fielders: ['3B'] }) === 'E5');
+ok('outs counted per play', outsOn({ r: 'DP', adv: { a: 0, b: 0 } }) === 2 && outsOn({ r: 'K' }) === 1);
+const ab1 = { p: 'a', r: '1B', adv: { a: 1 } }, ab2 = { p: 'b', r: '2B', adv: { a: 3, b: 2 } }, ab3 = { p: 'c', r: '1B', adv: { a: 4, b: 3, c: 1 } };
+ok('scorebook path: runner who singled, went to 3rd, then scored', pathFor(ab1, [ab2, ab3]).reached === 4);
+ok('scorebook path: thrown out at 2nd on a later play', pathFor(ab1, [{ p: 'x', r: 'FC', adv: { a: 0, x: 1 } }]).outAt === 2);
+console.log(`\n${pass}/${pass + fail} passed`); process.exit(fail ? 1 : 0);
