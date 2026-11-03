@@ -8,12 +8,13 @@ const RESULTS = [
   { k: 'BB', label: 'Walk' }, { k: 'E', label: 'Reached on error' }, { k: 'SF', label: 'Sac fly' },
   { k: 'OUT', label: 'Out', cls: 'outy' }, { k: 'K', label: 'Strikeout', cls: 'outy' },
 ];
-const st = { agents: [], diamonds: [], invites: [], team: null, players: [], games: [], rsvp: {}, ab: [], posts: [], loaded: { team: false, players: false, games: false }, canEdit: false, canWrite: false, offline: false };
+const st = { contacts: {}, agents: [], diamonds: [], invites: [], team: null, players: [], games: [], rsvp: {}, ab: [], posts: [], loaded: { team: false, players: false, games: false }, canEdit: false, canWrite: false, offline: false };
 let db = null, user = null;
 const view = document.getElementById('view');
 const LS = { get(k, d) { try { const v = localStorage.getItem('dugout-' + k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } }, set(k, v) { try { localStorage.setItem('dugout-' + k, JSON.stringify(v)); } catch (_) {} } };
-let me = LS.get('me', null);              // which roster player this viewer is (their own browser only)
+let me = null;                            // the roster spot linked to this account (players/<id>.uid), set when players load
 let selGame = LS.get('game', null);
+const openLists = new Set();              // RSVP lists the viewer has opened, kept open when data updates
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const toast = msg => { const t = document.getElementById('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => t.hidden = true, 2200); };
@@ -32,7 +33,7 @@ const defaultGame = () => { const g = sortedGames(); if (selGame && g.some(x => 
 async function write(fn, ok) {
   if (!db) { toast('Sign in to save changes'); return false; }
   try { await fn(); if (ok) toast(ok); return true; }
-  catch (e) { toast(e && e.code === 'not_granted' ? 'Only a captain can change this' : 'Could not save. Check your connection and try again.'); return false; }
+  catch (e) { toast(e && e.userMessage ? e.userMessage : e && e.code === 'not_granted' ? 'You don’t have permission to change that' : 'Could not save. Check your connection and try again.'); return false; }
 }
 
 /* ---------- views ---------- */
@@ -88,19 +89,19 @@ function renderSchedule() {
   const games = sortedGames(), up = games.filter(g => g.status !== 'final' && g.date >= today()), past = games.filter(g => !up.includes(g));
   const mine = me && st.players.find(p => p.id === me);
   view.innerHTML = `
-  <div class="row" style="margin-top:12px"><div class="grow small muted">${mine ? `You're <b>${esc(mine.name)}</b> <button class="btn ghost small" id="notMe" type="button">Change</button>` : st.players.length ? `Tap <b>This is me</b> next to your name so your answer is at the top.` : ''}</div>
+  <div class="row" style="margin-top:12px"><div class="grow small muted">${mine ? `You're <b>${esc(mine.name)}</b> <button class="btn ghost small" id="notMe" type="button">Change</button>` : st.players.length ? `Open <b>Show everyone</b> and tap <b>This is me</b> next to your name so you can answer for yourself.` : ''}</div>
   ${st.canEdit ? `<button class="btn" id="addGame" type="button">Add game</button>` : ''}</div>
   <div id="gameForm"></div>
   <h2>Coming up</h2>
   <div class="stack games">${up.length ? up.map(gameCard).join('') : `<div class="panel empty">No games scheduled.${st.canEdit ? ' Tap <b>Add game</b> to put one on the schedule.' : ''}</div>`}</div>
   ${past.length ? `<h2>Played</h2><div class="stack games">${past.reverse().map(gameCard).join('')}</div>` : ''}`;
   view.querySelectorAll('[data-rsvp]').forEach(b => b.addEventListener('click', () => setRsvp(b.dataset.g, b.dataset.p, b.dataset.v)));
-  view.querySelectorAll('[data-me]').forEach(b => b.addEventListener('click', () => { me = b.dataset.me; LS.set('me', me); render(); toast('Got it. You’re at the top now.'); }));
-  view.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { const el = document.getElementById('rs-' + b.dataset.open); el.hidden = !el.hidden; b.setAttribute('aria-expanded', !el.hidden); b.textContent = el.hidden ? 'Show everyone' : 'Hide list'; }));
+  view.querySelectorAll('[data-me]').forEach(b => b.addEventListener('click', () => write(() => platform.claimPlayer(b.dataset.me), 'Got it. You can answer for yourself now.')));
+  view.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { const el = document.getElementById('rs-' + b.dataset.open); el.hidden = !el.hidden; if (el.hidden) openLists.delete(b.dataset.open); else openLists.add(b.dataset.open); b.setAttribute('aria-expanded', !el.hidden); b.textContent = el.hidden ? 'Show everyone' : 'Hide list'; }));
   view.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => { selGame = b.dataset.g; LS.set('game', selGame); location.hash = '#' + b.dataset.go; }));
   view.querySelectorAll('[data-delgame]').forEach(b => b.addEventListener('click', () => confirmInline(b, 'Delete this game?', () => write(() => db.doc('games/' + b.dataset.delgame).delete(), 'Game deleted'))));
   view.querySelectorAll('[data-editgame]').forEach(b => b.addEventListener('click', () => gameForm(st.games.find(g => g.id === b.dataset.editgame))));
-  const ng = document.getElementById('notMe'); if (ng) ng.addEventListener('click', () => { me = null; LS.set('me', null); render(); });
+  const ng = document.getElementById('notMe'); if (ng) ng.addEventListener('click', () => confirmInline(ng, 'Unlink you from this name?', () => write(() => platform.unclaimPlayer(me), 'Unlinked'))); 
   const ag = document.getElementById('addGame'); if (ag) ag.addEventListener('click', () => gameForm(null));
 }
 function gameCard(g) {
@@ -125,20 +126,21 @@ function gameCard(g) {
       ${counts.in < 10 ? `<span class="pill warn">Need ${10 - counts.in} more for a full field</span>` : ''}
     </div>
     ${meRow ? `<div class="rsvp-row me"><span class="who">${esc(meRow.name)}</span>${rsvpSeg(g.id, meRow.id)}</div>` : ''}
-    <div class="row"><button class="btn ghost small" type="button" data-open="${g.id}" aria-expanded="false" aria-controls="rs-${g.id}">Show everyone</button></div>
-    <div class="rsvp-list" id="rs-${g.id}" hidden>
-      ${players.map(p => `<div class="rsvp-row${p.id === me ? ' me' : ''}"><span class="who">${esc(p.name)} <span class="muted">${esc(pNum(p.id))}</span></span>${rsvpSeg(g.id, p.id)}${!me ? `<button class="btn ghost small" type="button" data-me="${p.id}">This is me</button>` : ''}</div>`).join('') || '<p class="muted">Add players on the Team tab first.</p>'}
+    <div class="row"><button class="btn ghost small" type="button" data-open="${esc(g.id)}" aria-expanded="${openLists.has(g.id)}" aria-controls="rs-${esc(g.id)}">${openLists.has(g.id) ? 'Hide list' : 'Show everyone'}</button></div>
+    <div class="rsvp-list" id="rs-${esc(g.id)}"${openLists.has(g.id) ? '' : ' hidden'}>
+      ${players.map(p => `<div class="rsvp-row${p.id === me ? ' me' : ''}"><span class="who">${esc(p.name)} <span class="muted">${esc(pNum(p.id))}</span></span>${rsvpSeg(g.id, p.id)}${!me && !p.uid ? `<button class="btn ghost small" type="button" data-me="${esc(p.id)}">This is me</button>` : ''}</div>`).join('') || '<p class="muted">Add players on the Team tab first.</p>'}
     </div>`}
     <div class="row">
-      <button class="btn ghost small" type="button" data-go="lineup" data-g="${g.id}">Lineup</button>
-      <button class="btn ghost small" type="button" data-go="score" data-g="${g.id}">${final ? 'Box score' : 'Keep score'}</button>
-      ${st.canEdit ? `<button class="btn ghost small" type="button" data-editgame="${g.id}">Edit</button><button class="btn danger small" type="button" data-delgame="${g.id}">Delete</button>` : ''}
+      <button class="btn ghost small" type="button" data-go="lineup" data-g="${esc(g.id)}">Lineup</button>
+      <button class="btn ghost small" type="button" data-go="score" data-g="${esc(g.id)}">${final ? 'Box score' : 'Keep score'}</button>
+      ${st.canEdit ? `<button class="btn ghost small" type="button" data-editgame="${esc(g.id)}">Edit</button><button class="btn danger small" type="button" data-delgame="${esc(g.id)}">Delete</button>` : ''}
     </div>
   </article>`;
 }
 function rsvpSeg(gid, pid) {
   const s = rsvpOf(gid, pid), name = pName(pid);
-  return `<div class="seg" role="group" aria-label="${esc(name)} attending?">${[['in', 'In'], ['maybe', 'Maybe'], ['out', 'Out']].map(([v, l]) => `<button type="button" data-rsvp data-g="${gid}" data-p="${pid}" data-v="${v}" aria-pressed="${s === v}">${l}</button>`).join('')}</div>`;
+  if (!st.canEdit && pid !== me) return s ? `<span class="pill ${s === 'in' ? 'in' : s === 'out' ? 'out' : 'maybe'}">${s === 'in' ? 'In' : s === 'out' ? 'Out' : 'Maybe'}</span>` : '<span class="muted small">No reply</span>';
+  return `<div class="seg" role="group" aria-label="${esc(name)} attending?">${[['in', 'In'], ['maybe', 'Maybe'], ['out', 'Out']].map(([v, l]) => `<button type="button" data-rsvp data-g="${esc(gid)}" data-p="${esc(pid)}" data-v="${esc(v)}" aria-pressed="${esc(s === v)}">${l}</button>`).join('')}</div>`;
 }
 async function setRsvp(gid, pid, v) {
   const key = gid + '_' + pid, prev = st.rsvp[key];
@@ -209,12 +211,12 @@ function renderLineup() {
   <div class="row"><div class="grow muted small">${L.order.length} players · ${innings} innings${L.order.length > 10 ? ` · each player sits about ${Math.round((L.order.length - 10) * innings / L.order.length * 10) / 10} innings` : ''}</div>
   ${st.canEdit ? `<button class="btn ghost small" id="rebuild" type="button">Rebuild</button><button class="btn danger small" id="clearL" type="button">Clear</button>` : ''}</div>
   <h3 style="margin-top:8px">Batting order</h3>
-  <ol class="panel" style="list-style:none;padding:8px 16px;margin:0;gap:0">${L.order.map((id, i) => `<li class="row" style="padding:6px 0;border-top:${i ? '1px solid var(--line)' : '0'}"><span class="order-num">${i + 1}</span><span class="grow"><b>${esc(pName(id))}</b> <span class="muted">${esc(pNum(id))}</span></span>${st.canEdit ? `<button class="iconbtn" type="button" data-up="${i}" aria-label="Move ${esc(pName(id))} up" ${i ? '' : 'disabled'}>↑</button><button class="iconbtn" type="button" data-down="${i}" aria-label="Move ${esc(pName(id))} down" ${i < L.order.length - 1 ? '' : 'disabled'}>↓</button>` : ''}</li>`).join('')}</ol>
+  <ol class="panel" style="list-style:none;padding:8px 16px;margin:0;gap:0">${L.order.map((id, i) => `<li class="row" style="padding:6px 0;border-top:${i ? '1px solid var(--line)' : '0'}"><span class="order-num">${i + 1}</span><span class="grow"><b>${esc(pName(id))}</b> <span class="muted">${esc(pNum(id))}</span></span>${st.canEdit ? `<button class="iconbtn" type="button" data-up="${esc(i)}" aria-label="Move ${esc(pName(id))} up" ${i ? '' : 'disabled'}>↑</button><button class="iconbtn" type="button" data-down="${esc(i)}" aria-label="Move ${esc(pName(id))} down" ${i < L.order.length - 1 ? '' : 'disabled'}>↓</button>` : ''}</li>`).join('')}</ol>
   <h3 style="margin-top:18px">Positions by inning</h3>
   <p class="muted small" style="margin:4px 0 8px">${st.canEdit ? 'Pick from a box to swap someone in; the player who had that spot moves to where they were.' : 'BN means on the bench that inning.'}</p>
   <div class="lineup-scroll"><table>
     <thead><tr><th scope="col">Player</th>${L.field.map((_, i) => `<th scope="col" class="num">Inn ${i + 1}</th>`).join('')}</tr></thead>
-    <tbody>${L.order.map(id => `<tr><th scope="row" style="position:static;background:transparent;color:var(--ink);font:700 15px var(--font-body);text-transform:none;letter-spacing:0">${esc(pName(id))}</th>${L.field.map((inn, i) => { const pos = POS.find(k => inn[k] === id) || 'BN'; return `<td class="pos${pos === 'BN' ? ' bench' : ''}">${st.canEdit ? `<select aria-label="${esc(pName(id))}, inning ${i + 1}" data-cell="${i}" data-p="${id}" style="min-height:40px;width:auto;padding:4px 6px">${['BN', ...POS].map(k => `<option${k === pos ? ' selected' : ''}>${k}</option>`).join('')}</select>` : pos}</td>`; }).join('')}</tr>`).join('')}</tbody>
+    <tbody>${L.order.map(id => `<tr><th scope="row" style="position:static;background:transparent;color:var(--ink);font:700 15px var(--font-body);text-transform:none;letter-spacing:0">${esc(pName(id))}</th>${L.field.map((inn, i) => { const pos = POS.find(k => inn[k] === id) || 'BN'; return `<td class="pos${pos === 'BN' ? ' bench' : ''}">${st.canEdit ? `<select aria-label="${esc(pName(id))}, inning ${i + 1}" data-cell="${esc(i)}" data-p="${esc(id)}" style="min-height:40px;width:auto;padding:4px 6px">${['BN', ...POS].map(k => `<option${k === pos ? ' selected' : ''}>${k}</option>`).join('')}</select>` : pos}</td>`; }).join('')}</tr>`).join('')}</tbody>
   </table></div>
   ${L.field.some(inn => POS.some(k => !inn[k])) ? `<p class="notice small" style="margin-top:10px">Some innings have open positions. With fewer than 10 players, play three outfielders.</p>` : ''}`}`;
   bindPicker();
@@ -236,7 +238,7 @@ function renderLineup() {
 }
 function gamePicker(gid) {
   const g = sortedGames();
-  return `<label for="gamePick" class="sr">Game</label><select id="gamePick" style="margin-bottom:12px">${g.map(x => `<option value="${x.id}"${x.id === gid ? ' selected' : ''}>${esc(fmtDate(x.date).w)} ${esc(fmtDate(x.date).m)} ${esc(fmtDate(x.date).d)} · ${x.home ? 'vs' : '@'} ${esc(x.opp)}${x.status === 'final' ? ' (final)' : ''}</option>`).join('')}</select>`;
+  return `<label for="gamePick" class="sr">Game</label><select id="gamePick" style="margin-bottom:12px">${g.map(x => `<option value="${esc(x.id)}"${x.id === gid ? ' selected' : ''}>${esc(fmtDate(x.date).w)} ${esc(fmtDate(x.date).m)} ${esc(fmtDate(x.date).d)} · ${x.home ? 'vs' : '@'} ${esc(x.opp)}${x.status === 'final' ? ' (final)' : ''}</option>`).join('')}</select>`;
 }
 function bindPicker() { const s = document.getElementById('gamePick'); if (s) s.addEventListener('change', () => { selGame = s.value; LS.set('game', selGame); render(); }); }
 
@@ -261,9 +263,9 @@ function renderScore() {
   </div>
   ${keep ? `
   <div class="panel" style="margin-top:12px">
-    <div class="row"><div class="grow"><div class="muted small">Inning ${g.inning || 1} · now batting</div><div class="atbat">${batter ? esc(pName(batter)) : 'No lineup'}</div>${onDeck ? `<div class="muted small">On deck: ${esc(pName(onDeck))}</div>` : ''}</div></div>
+    <div class="row"><div class="grow"><div class="muted small">Inning ${esc(g.inning || 1)} · now batting</div><div class="atbat">${batter ? esc(pName(batter)) : 'No lineup'}</div>${onDeck ? `<div class="muted small">On deck: ${esc(pName(onDeck))}</div>` : ''}</div></div>
     ${batter ? `<div class="row"><span class="grow small"><b>Runs scored on this play</b></span><div class="stepper"><button class="iconbtn" type="button" id="rbiM" aria-label="One fewer run">−</button><output id="rbiV" aria-live="polite">${rbi}</output><button class="iconbtn" type="button" id="rbiP" aria-label="One more run">+</button></div></div>
-    <div class="result-grid">${RESULTS.map(r => `<button type="button" class="${r.cls || ''}" data-res="${r.k}">${r.label}</button>`).join('')}</div>` : `<p class="muted">Build a lineup first, or mark players In on the Games tab.</p>`}
+    <div class="result-grid">${RESULTS.map(r => `<button type="button" class="${esc(r.cls || '')}" data-res="${esc(r.k)}">${r.label}</button>`).join('')}</div>` : `<p class="muted">Build a lineup first, or mark players In on the Games tab.</p>`}
     <div class="row">
       <button class="btn ghost small" type="button" id="themM" aria-label="Take a run off their score this inning">Them −1</button>
       <button class="btn ghost small" type="button" id="themP">Them +1 run</button>
@@ -310,7 +312,7 @@ function renderStats() {
   const f3 = v => v.toFixed(3).replace(/^0/, '');
   view.innerHTML = `<h2>Season stats</h2>
   ${rows.length ? `<p class="muted small">Tap a column to sort. Built from every at-bat on the Score tab.</p>
-  <div class="lineup-scroll"><table><thead><tr><th scope="col">Player</th>${cols.map(k => `<th scope="col" class="num"><button type="button" data-sort="${k}" style="all:unset;cursor:pointer;${k === statSort ? 'color:var(--grass)' : ''}" aria-pressed="${k === statSort}">${k}</button></th>`).join('')}</tr></thead>
+  <div class="lineup-scroll"><table><thead><tr><th scope="col">Player</th>${cols.map(k => `<th scope="col" class="num"><button type="button" data-sort="${esc(k)}" style="all:unset;cursor:pointer;${k === statSort ? 'color:var(--grass)' : ''}" aria-pressed="${esc(k === statSort)}">${k}</button></th>`).join('')}</tr></thead>
   <tbody>${rows.map(({ p, s }) => `<tr><td><b>${esc(p.name)}</b></td>${cols.map(k => `<td class="num">${['AVG', 'OBP', 'SLG'].includes(k) ? f3(s[k]) : s[k]}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : `<div class="panel empty">Stats show up here once you keep score for a game.</div>`}`;
   view.querySelectorAll('[data-sort]').forEach(b => b.addEventListener('click', () => { statSort = b.dataset.sort; LS.set('sort', statSort); render(); }));
 }
@@ -319,7 +321,7 @@ function renderStats() {
 function renderRoster() {
   const fee = st.team?.fee || 0, paid = st.players.filter(p => p.paid).length;
   view.innerHTML = `<h2>Roster</h2>
-  ${fee ? `<p class="muted small" style="margin-top:-4px">Season fee $${fee}: ${paid} of ${st.players.length} paid · $${paid * fee} collected, $${(st.players.length - paid) * fee} to go</p>` : ''}
+  ${fee ? `<p class="muted small" style="margin-top:-4px">Season fee $${esc(fee)}: ${paid} of ${st.players.length} paid · $${esc(paid * fee)} collected, $${esc((st.players.length - paid) * fee)} to go</p>` : ''}
   ${st.canEdit ? `<form class="panel" id="pf">
     <h3 id="pfTitle">Add a player</h3>
     <div class="form-grid">
@@ -327,7 +329,7 @@ function renderRoster() {
       <label for="pNum">Jersey number<input id="pNum" type="text" inputmode="numeric" maxlength="3"></label>
     </div>
     <fieldset style="border:0;padding:0;margin:0"><legend style="font-weight:700;margin-bottom:6px">Positions they like</legend>
-      <div class="row">${POS.map(k => `<label style="display:flex;gap:6px;align-items:center;font-weight:400;min-height:44px;padding:0 6px;border:1.5px solid var(--line);border-radius:10px"><input type="checkbox" value="${k}" class="posbox"> ${k}</label>`).join('')}</div>
+      <div class="row">${POS.map(k => `<label style="display:flex;gap:6px;align-items:center;font-weight:400;min-height:44px;padding:0 6px;border:1.5px solid var(--line);border-radius:10px"><input type="checkbox" value="${esc(k)}" class="posbox"> ${k}</label>`).join('')}</div>
     </fieldset>
     <input type="hidden" id="pId">
     <div class="row"><button class="btn" type="submit" id="pfSave">Add player</button><button class="btn ghost" type="button" id="pfCancel" hidden>Cancel</button></div>
@@ -335,8 +337,8 @@ function renderRoster() {
   <div class="stack" style="margin-top:12px">
   ${st.players.length ? st.players.map(p => `<div class="panel" style="padding:12px 16px"><div class="row">
       <div class="grow"><b>${esc(p.name)}</b> <span class="muted">${esc(pNum(p.id))}</span><div class="muted small">${(p.pos || []).map(k => POS_NAME[k]).join(', ') || 'Any position'}</div></div>
-      ${fee ? (st.canEdit ? `<button class="chip-btn" type="button" data-paid="${p.id}" aria-pressed="${!!p.paid}">${p.paid ? 'Paid' : 'Not paid'}</button>` : `<span class="pill ${p.paid ? 'in' : 'out'}">${p.paid ? 'Paid' : 'Not paid'}</span>`) : ''}
-      ${st.canEdit ? `<button class="btn ghost small" type="button" data-edit="${p.id}">Edit</button><button class="btn danger small" type="button" data-del="${p.id}">Remove</button>` : ''}
+      ${fee ? (st.canEdit ? `<button class="chip-btn" type="button" data-paid="${esc(p.id)}" aria-pressed="${esc(!!p.paid)}">${p.paid ? 'Paid' : 'Not paid'}</button>` : `<span class="pill ${p.paid ? 'in' : 'out'}">${p.paid ? 'Paid' : 'Not paid'}</span>`) : ''}
+      ${st.canEdit ? `<button class="btn ghost small" type="button" data-edit="${esc(p.id)}">Edit</button><button class="btn danger small" type="button" data-del="${esc(p.id)}">Remove</button>` : ''}
     </div></div>`).join('') : `<div class="panel empty">No players yet.${st.canEdit ? ' Add your first one above.' : ''}</div>`}
   </div>
   ${st.canEdit ? `<h2>Team settings</h2>
@@ -379,7 +381,7 @@ let names = {};
 async function renderBoard() {
   view.innerHTML = `<h2>Team board</h2>
   ${st.canWrite ? `<form class="panel" id="bf"><label for="bText">Post to the team<textarea id="bText" maxlength="600" placeholder="e.g. Bring the orange balls on Sunday. Diamond 3 moved to 7pm."></textarea></label><div class="row"><button class="btn" type="submit">Post</button></div></form>` : `<p class="muted">You can read the board. Join the team to post.</p>`}
-  <div class="panel" style="margin-top:12px">${st.posts.length ? [...st.posts].sort((a, b) => b.at - a.at).map(p => `<div class="post"><div class="meta">${esc(names[p.u] || 'Teammate')} · ${esc(new Date(p.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}${p.pin ? ' · <b style="color:var(--clay)">Pinned</b>' : ''}</div><p>${esc(p.text)}</p>${st.canEdit ? `<div class="row"><button class="btn ghost small" type="button" data-pin="${p.id}">${p.pin ? 'Unpin' : 'Pin'}</button><button class="btn danger small" type="button" data-delpost="${p.id}">Delete</button></div>` : ''}</div>`).join('') : '<p class="empty">No posts yet.</p>'}</div>`;
+  <div class="panel" style="margin-top:12px">${st.posts.length ? [...st.posts].sort((a, b) => b.at - a.at).map(p => `<div class="post"><div class="meta">${esc(names[p.u] || 'Teammate')} · ${esc(new Date(p.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}${p.pin ? ' · <b style="color:var(--clay)">Pinned</b>' : ''}</div><p>${esc(p.text)}</p>${st.canEdit ? `<div class="row"><button class="btn ghost small" type="button" data-pin="${esc(p.id)}">${p.pin ? 'Unpin' : 'Pin'}</button><button class="btn danger small" type="button" data-delpost="${esc(p.id)}">Delete</button></div>` : p.u && p.u === myId ? `<div class="row"><button class="btn danger small" type="button" data-delpost="${esc(p.id)}">Delete</button></div>` : ''}</div>`).join('') : '<p class="empty">No posts yet.</p>'}</div>`;
   const f = document.getElementById('bf');
   if (f) f.addEventListener('submit', async e => { e.preventDefault(); const t = document.getElementById('bText').value.trim(); if (!t) return; const u = user ? await user.id() : null; if (await write(() => db.doc('posts/' + uid()).set({ text: t, at: Date.now(), u }), 'Posted')) document.getElementById('bText').value = ''; });
   view.querySelectorAll('[data-delpost]').forEach(b => b.addEventListener('click', () => confirmInline(b, 'Delete post?', () => write(() => db.doc('posts/' + b.dataset.delpost).delete(), 'Post deleted'))));
@@ -413,8 +415,8 @@ const fromPoint = () => { if (!F.from) return null; const d = st.diamonds.find(x
 function renderSubs() {
   view.innerHTML = `<h2>Subs</h2>
   <div class="seg" role="tablist" aria-label="Subs" style="margin-bottom:14px">
-    <button type="button" role="tab" aria-selected="${subMode === 'find'}" aria-pressed="${subMode === 'find'}" data-mode="find" data-v="in">Find a sub</button>
-    <button type="button" role="tab" aria-selected="${subMode === 'me'}" aria-pressed="${subMode === 'me'}" data-mode="me" data-v="in">${st.agents.some(a => a.id === myId) ? 'My sub profile' : 'Sign up to sub'}</button>
+    <button type="button" role="tab" aria-selected="${esc(subMode === 'find')}" aria-pressed="${esc(subMode === 'find')}" data-mode="find" data-v="in">Find a sub</button>
+    <button type="button" role="tab" aria-selected="${esc(subMode === 'me')}" aria-pressed="${esc(subMode === 'me')}" data-mode="me" data-v="in">${st.agents.some(a => a.id === myId) ? 'My sub profile' : 'Sign up to sub'}</button>
   </div>
   <div id="subBody"></div>`;
   view.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => { subMode = b.dataset.mode; LS.set('submode', subMode); renderSubs(); }));
@@ -425,7 +427,7 @@ function chips(name, list, sel, labelFn = x => x) {
   return `<div class="chipset" role="group" aria-label="${esc(name)}">${list.map(v => { const val = Array.isArray(v) ? v[0] : v, lab = Array.isArray(v) ? v[1] : labelFn(v);
     return `<label class="chk"><input type="checkbox" value="${esc(val)}" data-set="${esc(name)}"${sel.includes(val) ? ' checked' : ''}> <span>${esc(lab)}</span></label>`; }).join('')}</div>`;
 }
-const checked = (root, name) => [...root.querySelectorAll(`input[data-set="${name}"]:checked`)].map(x => x.value);
+const checked = (root, name) => [...root.querySelectorAll(`input[data-set="${esc(name)}"]:checked`)].map(x => x.value);
 
 function renderMySub() {
   const box = document.getElementById('subBody');
@@ -434,16 +436,16 @@ function renderMySub() {
   const inv = st.invites.filter(i => i.agent === myId).sort((x, y) => y.at - x.at);
   box.innerHTML = `
   ${inv.length ? `<h3>Requests from captains</h3><div class="stack" style="margin:8px 0 18px">${inv.map(i => `<div class="panel" style="padding:12px 16px"><div class="row"><div class="grow"><b>${esc(i.team)}</b> wants you ${i.date ? `on ${esc(fmtDate(i.date).w)} ${esc(fmtDate(i.date).m)} ${esc(fmtDate(i.date).d)}` : ''}${i.time ? ' at ' + esc(fmtTime(i.time)) : ''}${i.field ? ' · ' + esc(i.field) : ''}${i.opp ? ' vs ' + esc(i.opp) : ''}${i.note ? `<div class="muted small">“${esc(i.note)}”</div>` : ''}</div>
-      ${i.status === 'pending' ? `<button class="btn small" type="button" data-inv="${i.id}" data-s="accepted">I'm in</button><button class="btn ghost small" type="button" data-inv="${i.id}" data-s="declined">Can't make it</button>` : `<span class="pill ${i.status === 'accepted' ? 'in' : 'out'}">${i.status === 'accepted' ? 'You said yes' : 'You said no'}</span>`}</div></div>`).join('')}</div>` : ''}
+      ${i.status === 'pending' ? `<button class="btn small" type="button" data-inv="${esc(i.id)}" data-s="accepted">I'm in</button><button class="btn ghost small" type="button" data-inv="${esc(i.id)}" data-s="declined">Can't make it</button>` : `<span class="pill ${i.status === 'accepted' ? 'in' : 'out'}">${i.status === 'accepted' ? 'You said yes' : 'You said no'}</span>`}</div></div>`).join('')}</div>` : ''}
   <form class="panel" id="af">
     <p class="muted small">Captains in this league see this profile when they search for subs. Only fill in what you're happy to share.</p>
     <label class="chk big"><input type="checkbox" id="aActive"${a.active ? ' checked' : ''}> <span><b>I'm available to sub right now</b></span></label>
     <div class="form-grid">
       <label for="aName">Name captains will see<input id="aName" type="text" required maxlength="40" value="${esc(a.name || '')}" placeholder="e.g. Jordan P."></label>
-      <label for="aGender">Gender <span class="muted small">(co-ed leagues need it)</span><select id="aGender">${GENDERS.map(([v, l]) => `<option value="${v}"${(a.gender || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-      <label for="aSkill">Level<select id="aSkill">${SKILL.slice(1).map((l, i) => `<option value="${i + 1}"${+a.skill === i + 1 ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-      <label for="aBats">Bats<select id="aBats">${[['R', 'Right'], ['L', 'Left'], ['S', 'Switch']].map(([v, l]) => `<option value="${v}"${a.bats === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-      <label for="aThrows">Throws<select id="aThrows">${[['R', 'Right'], ['L', 'Left']].map(([v, l]) => `<option value="${v}"${a.throws === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label for="aGender">Gender <span class="muted small">(co-ed leagues need it)</span><select id="aGender">${GENDERS.map(([v, l]) => `<option value="${esc(v)}"${(a.gender || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label for="aSkill">Level<select id="aSkill">${SKILL.slice(1).map((l, i) => `<option value="${esc(i + 1)}"${+a.skill === i + 1 ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label for="aBats">Bats<select id="aBats">${[['R', 'Right'], ['L', 'Left'], ['S', 'Switch']].map(([v, l]) => `<option value="${esc(v)}"${a.bats === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label for="aThrows">Throws<select id="aThrows">${[['R', 'Right'], ['L', 'Left']].map(([v, l]) => `<option value="${esc(v)}"${a.throws === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
     </div>
     <fieldset><legend>Where I like to play</legend>${chips('pos', POS.map(k => [k, POS_NAME[k]]), a.pos || [])}</fieldset>
     <fieldset><legend>Strengths</legend>${chips('str', STRENGTHS, a.str || [])}</fieldset>
@@ -453,11 +455,11 @@ function renderMySub() {
     <fieldset><legend>Game times</legend>${chips('times', TIMES, a.times || [])}</fieldset>
     <div class="form-grid">
       <label for="aWhere">Where I'm coming from<input id="aWhere" type="text" maxlength="80" value="${esc(a.area || '')}" placeholder="Postal code, neighbourhood or city"></label>
-      <label for="aRadius">How far I'll travel<select id="aRadius">${[5, 10, 15, 25, 40, 60].map(k => `<option value="${k}"${+a.radius === k ? ' selected' : ''}>Up to ${k} km</option>`).join('')}</select></label>
+      <label for="aRadius">How far I'll travel<select id="aRadius">${[5, 10, 15, 25, 40, 60].map(k => `<option value="${esc(k)}"${+a.radius === k ? ' selected' : ''}>Up to ${k} km</option>`).join('')}</select></label>
     </div>
     <p class="muted small" id="aLocNote">${a.lat != null ? `Located near <b>${esc(a.area)}</b>. Only an area about 1 km wide is stored, never your address.` : 'Only a rough area (about 1 km) is stored, never your address.'}</p>
-    <label for="aContact">How captains can reach you<input id="aContact" type="text" maxlength="80" value="${esc(a.contact || '')}" placeholder="e.g. text 416-555-0142, or @jordanplays"></label>
-    <p class="muted small" style="margin-top:-6px">Everyone with access to this team app can see this.</p>
+    <label for="aContact">How captains can reach you<input id="aContact" type="text" maxlength="80" value="${esc(st.contacts[myId] || '')}" placeholder="e.g. text 416-555-0142, or @jordanplays"></label>
+    <p class="muted small" style="margin-top:-6px">Private. A captain sees this only after you say yes to their request.</p>
     <div class="row"><button class="btn" type="submit" id="aSave">${st.agents.some(x => x.id === myId) ? 'Save profile' : 'Join the sub list'}</button>
     ${st.agents.some(x => x.id === myId) ? `<button class="btn danger" type="button" id="aDel">Remove my profile</button>` : ''}</div>
   </form>`;
@@ -472,14 +474,15 @@ function renderMySub() {
     const data = { name: document.getElementById('aName').value.trim(), gender: document.getElementById('aGender').value, skill: +document.getElementById('aSkill').value,
       bats: document.getElementById('aBats').value, throws: document.getElementById('aThrows').value, pos: checked(form, 'pos'), str: checked(form, 'str'), weak: checked(form, 'weak'),
       about: document.getElementById('aAbout').value.trim(), days: checked(form, 'days'), times: checked(form, 'times'), radius: +document.getElementById('aRadius').value,
-      contact: document.getElementById('aContact').value.trim(), active: document.getElementById('aActive').checked, area: loc ? loc.label : area,
+      active: document.getElementById('aActive').checked, area: loc ? loc.label : area,
       lat: loc ? loc.lat : null, lng: loc ? loc.lng : null, updated: Date.now() };
     if (!data.name) { btn.disabled = false; return; }
-    await write(() => db.doc('agents/' + myId).set(data), 'Your sub profile is live');
+    const contact = document.getElementById('aContact').value.trim();
+    await write(async () => { await db.doc('agents/' + myId).set(data); if (contact) await db.doc('contacts/' + myId).set({ contact }); else if (st.contacts[myId]) await db.doc('contacts/' + myId).delete(); }, 'Your sub profile is live');
     btn.disabled = false;
   });
   const del = document.getElementById('aDel');
-  if (del) del.addEventListener('click', () => confirmInline(del, 'Remove your sub profile?', () => write(() => db.doc('agents/' + myId).delete(), 'Profile removed')));
+  if (del) del.addEventListener('click', () => confirmInline(del, 'Remove your sub profile?', () => write(async () => { await db.doc('agents/' + myId).delete(); if (st.contacts[myId]) await db.doc('contacts/' + myId).delete(); }, 'Profile removed')));
 }
 
 function renderFind() {
@@ -503,15 +506,15 @@ function renderFind() {
     <details id="filtDet"${window.innerWidth >= 900 || LS.get('filtOpen', false) ? ' open' : ''}><summary><b>Filters</b>${nF ? ` <span class="pill in">${nF} on</span>` : ''}</summary>
     <div class="stack" style="margin-top:12px">
       <label for="fQ">Search names and notes<input id="fQ" type="search" value="${esc(F.q)}" placeholder="e.g. pitcher, Leslieville"></label>
-      <label for="fFrom">Distance from diamond<select id="fFrom"><option value="">Anywhere</option>${st.diamonds.map(d => `<option value="${d.id}"${F.from === d.id ? ' selected' : ''}>${esc(d.name)}</option>`).join('')}${F.fromLoc ? `<option value="custom"${F.from === 'custom' ? ' selected' : ''}>${esc(F.fromLoc.label)}</option>` : ''}</select></label>
-      ${F.from ? `<label for="fKm"><span>Within <output id="fKmOut">${F.km}</output> km</span><input id="fKm" type="range" min="2" max="60" step="1" value="${F.km}"></label>` : ''}
+      <label for="fFrom">Distance from diamond<select id="fFrom"><option value="">Anywhere</option>${st.diamonds.map(d => `<option value="${esc(d.id)}"${F.from === d.id ? ' selected' : ''}>${esc(d.name)}</option>`).join('')}${F.fromLoc ? `<option value="custom"${F.from === 'custom' ? ' selected' : ''}>${esc(F.fromLoc.label)}</option>` : ''}</select></label>
+      ${F.from ? `<label for="fKm"><span>Within <output id="fKmOut">${F.km}</output> km</span><input id="fKm" type="range" min="2" max="60" step="1" value="${esc(F.km)}"></label>` : ''}
       <form class="row" id="dForm"><label for="dName" class="grow" style="font-weight:400"><span class="small muted">${st.canEdit ? 'Add a diamond' : 'Search from a place'}</span><input id="dName" type="text" maxlength="80" placeholder="e.g. Christie Pits, Toronto"></label><button class="btn ghost small" type="submit" style="align-self:end">${st.canEdit ? 'Add' : 'Use'}</button></form>
       <fieldset><legend>Plays</legend>${chips('fpos', POS.map(k => [k, k]), F.pos)}</fieldset>
-      <label for="fGender">Gender<select id="fGender"><option value="">Any</option>${GENDERS.filter(g => g[0]).map(([v, l]) => `<option value="${v}"${F.gender === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-      <label for="fSkill">Level at least<select id="fSkill"><option value="0">Any</option>${SKILL.slice(1).map((l, i) => `<option value="${i + 1}"${F.skill === i + 1 ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label for="fGender">Gender<select id="fGender"><option value="">Any</option>${GENDERS.filter(g => g[0]).map(([v, l]) => `<option value="${esc(v)}"${F.gender === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label for="fSkill">Level at least<select id="fSkill"><option value="0">Any</option>${SKILL.slice(1).map((l, i) => `<option value="${esc(i + 1)}"${F.skill === i + 1 ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
       <div class="form-grid" style="grid-template-columns:1fr 1fr">
         <label for="fDay">Free on<select id="fDay"><option value="">Any day</option>${DAYS.map(d => `<option${F.day === d ? ' selected' : ''}>${d}</option>`).join('')}</select></label>
-        <label for="fTime">Time<select id="fTime"><option value="">Any time</option>${TIMES.map(([v, l]) => `<option value="${v}"${F.time === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label for="fTime">Time<select id="fTime"><option value="">Any time</option>${TIMES.map(([v, l]) => `<option value="${esc(v)}"${F.time === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
         <label for="fBats">Bats<select id="fBats"><option value="">Either</option><option value="R"${F.bats === 'R' ? ' selected' : ''}>Right</option><option value="L"${F.bats === 'L' ? ' selected' : ''}>Left</option><option value="S"${F.bats === 'S' ? ' selected' : ''}>Switch</option></select></label>
         <label for="fThrows">Throws<select id="fThrows"><option value="">Either</option><option value="R"${F.throws === 'R' ? ' selected' : ''}>Right</option><option value="L"${F.throws === 'L' ? ' selected' : ''}>Left</option></select></label>
       </div>
@@ -555,33 +558,33 @@ function agentCard(a, d) {
     <div class="row" style="align-items:flex-start">
       <div class="crest" aria-hidden="true" style="width:40px;height:40px;font-size:17px">${esc((a.name || '?').trim().slice(0, 1).toUpperCase())}</div>
       <div class="grow" style="min-width:0"><div class="vs" style="font-size:1.15em">${esc(a.name)}</div>
-        <div class="muted small">${[SKILL[a.skill] || '', (GENDERS.find(g => g[0] === a.gender) || [, ''])[1] && a.gender ? GENDERS.find(g => g[0] === a.gender)[1] : '', `Bats ${a.bats || '?'} · Throws ${a.throws || '?'}`].filter(Boolean).join(' · ')}</div></div>
-      ${d != null ? `<span class="pill ${far ? 'maybe' : 'in'}" title="${far ? `Further than the ${a.radius} km they said they'd travel` : ''}">${d < 1 ? '<1' : Math.round(d)} km${far ? ' · far for them' : ''}</span>` : a.area ? `<span class="pill" style="border:1.5px solid var(--line)">${esc(a.area)}</span>` : ''}
+        <div class="muted small">${[SKILL[a.skill] || '', (GENDERS.find(g => g[0] === a.gender) || [, ''])[1] && a.gender ? GENDERS.find(g => g[0] === a.gender)[1] : '', `Bats ${esc(a.bats || '?')} · Throws ${esc(a.throws || '?')}`].filter(Boolean).join(' · ')}</div></div>
+      ${d != null ? `<span class="pill ${far ? 'maybe' : 'in'}" title="${far ? `Further than the ${esc(a.radius)} km they said they'd travel` : ''}">${d < 1 ? '<1' : Math.round(d)} km${far ? ' · far for them' : ''}</span>` : a.area ? `<span class="pill" style="border:1.5px solid var(--line)">${esc(a.area)}</span>` : ''}
     </div>
-    ${(a.pos || []).length ? `<div class="small"><b>Plays:</b> ${(a.pos || []).map(k => POS_NAME[k]).join(', ')}</div>` : ''}
+    ${(a.pos || []).length ? `<div class="small"><b>Plays:</b> ${(a.pos || []).map(k => esc(POS_NAME[k] || k)).join(', ')}</div>` : ''}
     ${(a.str || []).length ? `<div class="tagrow">${a.str.map(t => `<span class="tag good">${esc(t)}</span>`).join('')}</div>` : ''}
     ${(a.weak || []).length ? `<div class="small muted"><b>Working on:</b> ${a.weak.map(esc).join(', ')}</div>` : ''}
     ${a.about ? `<p style="margin:0">${esc(a.about)}</p>` : ''}
-    <div class="small muted">${(a.days || []).length ? 'Free ' + a.days.join(', ') : 'Days not given'}${(a.times || []).length ? ' · ' + a.times.map(t => (TIMES.find(x => x[0] === t) || [, t])[1]).join(', ') : ''}${a.area ? ' · from ' + esc(a.area) : ''}${a.radius ? ` · travels up to ${a.radius} km` : ''}${a.active ? '' : ' · <b>not available right now</b>'}</div>
-    ${a.contact ? `<div class="small"><b>Reach them:</b> <span style="user-select:all">${esc(a.contact)}</span></div>` : ''}
-    <div class="row">${a.id === myId ? '<span class="muted small">This is you</span>' : st.canEdit ? `<button class="btn small" type="button" data-ask="${a.id}">Ask to sub</button>` : ''}
+    <div class="small muted">${(a.days || []).length ? 'Free ' + a.days.map(esc).join(', ') : 'Days not given'}${(a.times || []).length ? ' · ' + a.times.map(t => esc((TIMES.find(x => x[0] === t) || [, t])[1])).join(', ') : ''}${a.area ? ' · from ' + esc(a.area) : ''}${a.radius ? ` · travels up to ${esc(a.radius)} km` : ''}${a.active ? '' : ' · <b>not available right now</b>'}</div>
+    ${st.contacts[a.id] ? `<div class="small"><b>Reach them:</b> <span style="user-select:all">${esc(st.contacts[a.id])}</span></div>` : a.id !== myId && st.canEdit ? `<div class="small muted">Their contact details show here once they say yes to a request.</div>` : ''}
+    <div class="row">${a.id === myId ? '<span class="muted small">This is you</span>' : st.canEdit ? `<button class="btn small" type="button" data-ask="${esc(a.id)}">Ask to sub</button>` : ''}
       ${sent ? `<span class="pill ${sent.status === 'accepted' ? 'in' : sent.status === 'declined' ? 'out' : 'maybe'}">${sent.status === 'accepted' ? 'Said yes' : sent.status === 'declined' ? 'Said no' : 'Asked, waiting'}${sent.date ? ' · ' + esc(fmtDate(sent.date).m + ' ' + fmtDate(sent.date).d) : ''}</span>` : ''}</div>
-    <div data-askbox="${a.id}"></div>
+    <div data-askbox="${esc(a.id)}"></div>
   </article>`;
 }
 function askForm(btn) {
-  const a = st.agents.find(x => x.id === btn.dataset.ask), box = view.querySelector(`[data-askbox="${a.id}"]`);
+  const a = st.agents.find(x => x.id === btn.dataset.ask), box = view.querySelector(`[data-askbox="${esc(a.id)}"]`);
   const games = sortedGames().filter(g => g.status !== 'final' && g.date >= today());
   box.innerHTML = `<form class="stack" style="border-top:1px solid var(--line);padding-top:12px">
-    <label for="ag-${a.id}">Which game?<select id="ag-${a.id}">${games.map(g => `<option value="${g.id}">${esc(fmtDate(g.date).w)} ${esc(fmtDate(g.date).m)} ${esc(fmtDate(g.date).d)}, ${esc(fmtTime(g.time))} · ${g.home ? 'vs' : '@'} ${esc(g.opp)}${g.field ? ' · ' + esc(g.field) : ''}</option>`).join('') || '<option value="">Any upcoming game</option>'}</select></label>
-    <label for="an-${a.id}">Message <span class="muted small">(optional)</span><input id="an-${a.id}" type="text" maxlength="160" placeholder="e.g. We need an outfielder, can you make it?"></label>
+    <label for="ag-${esc(a.id)}">Which game?<select id="ag-${esc(a.id)}">${games.map(g => `<option value="${esc(g.id)}">${esc(fmtDate(g.date).w)} ${esc(fmtDate(g.date).m)} ${esc(fmtDate(g.date).d)}, ${esc(fmtTime(g.time))} · ${g.home ? 'vs' : '@'} ${esc(g.opp)}${g.field ? ' · ' + esc(g.field) : ''}</option>`).join('') || '<option value="">Any upcoming game</option>'}</select></label>
+    <label for="an-${esc(a.id)}">Message <span class="muted small">(optional)</span><input id="an-${esc(a.id)}" type="text" maxlength="160" placeholder="e.g. We need an outfielder, can you make it?"></label>
     <div class="row"><button class="btn small" type="submit">Send request</button><button class="btn ghost small" type="button" data-cancel>Cancel</button></div>
-    <p class="muted small" style="margin:0">They'll see it on their sub profile here. For a faster answer, also reach out the way they listed.</p>
+    <p class="muted small" style="margin:0">They'll see it on their sub profile in Dugout. If they say yes, their contact details appear on their card.</p>
   </form>`;
   box.querySelector('[data-cancel]').onclick = () => box.innerHTML = '';
   box.querySelector('form').addEventListener('submit', async e => {
     e.preventDefault(); const g = st.games.find(x => x.id === document.getElementById('ag-' + a.id).value);
-    const data = { agent: a.id, team: st.team ? st.team.name : 'A team', gid: g ? g.id : '', opp: g ? g.opp : '', date: g ? g.date : '', time: g ? g.time : '', field: g ? g.field : '', note: document.getElementById('an-' + a.id).value.trim(), by: myId, at: Date.now(), status: 'pending' };
+    const data = { agent: a.id, teamId: platform.teamId, team: st.team ? st.team.name : 'A team', gid: g ? g.id : '', opp: g ? g.opp : '', date: g ? g.date : '', time: g ? g.time : '', field: g ? g.field : '', note: document.getElementById('an-' + a.id).value.trim(), by: myId, at: Date.now(), status: 'pending' };
     await write(() => db.doc('invites/' + uid()).set(data), `Asked ${a.name} to sub`);
   });
 }
@@ -622,19 +625,20 @@ render();
   try { user = await platform.use('user'); } catch (_) { user = null; }
   if (!db) { clearTimeout(timer); st.offline = true; render(); return; }
   st.canEdit = user ? !!user.canEdit() : false;
+  try { myId = user ? await user.id() : null; } catch (_) { myId = null; }
   const cw = user ? user.can('data.write') : null; st.canWrite = cw === null ? true : !!cw;
   let pending = null; const soon = () => { clearTimeout(pending); pending = setTimeout(() => { if (!document.activeElement || !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) render(); else pendingRender = true; }, 60); };
   let pendingRender = false; document.addEventListener('focusout', () => { if (pendingRender) { pendingRender = false; setTimeout(render, 0); } });
   const fail = () => { clearTimeout(timer); };
   db.doc('team/info').onSnapshot(s => { clearTimeout(timer); st.team = s.exists ? s.data() : null; st.loaded.team = true; st.offline = false; soon(); }, fail);
-  db.collection('players').onSnapshot(s => { st.players = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.order || 0) - (b.order || 0)); soon(); }, fail);
+  db.collection('players').onSnapshot(s => { st.players = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.order || 0) - (b.order || 0)); const mine = myId && st.players.find(p => p.uid === myId); me = mine ? mine.id : null; soon(); }, fail);
   db.collection('games').onSnapshot(s => { st.games = s.docs.map(d => ({ id: d.id, ...d.data() })); soon(); }, fail);
   db.collection('rsvp').onSnapshot(s => { st.rsvp = {}; s.docs.forEach(d => st.rsvp[d.id] = d.data()); soon(); }, fail);
   db.collection('ab').onSnapshot(s => { st.ab = s.docs.map(d => ({ id: d.id, ...d.data() })); soon(); }, fail);
-  try { myId = user ? await user.id() : null; } catch (_) { myId = null; }
     db.collection('agents').onSnapshot(s => { st.agents = s.docs.map(d => ({ id: d.id, ...d.data() })); soon(); }, fail);
   db.collection('diamonds').onSnapshot(s => { st.diamonds = s.docs.map(d => ({ id: d.id, ...d.data() })); soon(); }, fail);
-  db.collection('invites').onSnapshot(s => { st.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); soon(); }, fail);
+  db.collection('invites').onSnapshot(s => { st.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); db.collection('contacts').refresh().catch(() => {}); soon(); }, fail);
+  db.collection('contacts').onSnapshot(s => { st.contacts = {}; s.docs.forEach(d => st.contacts[d.id] = d.data().contact); soon(); }, fail);
   db.collection('posts').onSnapshot(s => { st.posts = s.docs.map(d => ({ id: d.id, ...d.data() })); soon(); }, fail);
 })();
 }

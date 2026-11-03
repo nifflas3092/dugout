@@ -198,3 +198,6 @@ dialog.menu .mrow .grow { flex: 1; min-width: 120px; }
 dialog.menu code { font: 700 1.1em/1 ui-monospace, Menlo, monospace; letter-spacing: .08em; }
 .agent .row > .grow { min-width: 9em; }
 .agent .pill { max-width: 100%; overflow-wrap: anywhere; }
+/* phones: title gets the full width, buttons sit on their own row */
+.teamname { flex: 1; min-width: 0; }
+@media (max-width: 599px) { header.top .tools { width: 100%; } header.top .tools .chip-btn { flex: 1; } }

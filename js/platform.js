@@ -3,7 +3,7 @@
    Here that is mapped onto one Postgres table, public.docs (scope, col, id, data), with live updates. */
 import { GEOCODER, MAPBOX_TOKEN } from '../config.js';
 
-const GLOBAL = new Set(['agents', 'diamonds', 'invites']); // the league-wide sub list; everything else belongs to one team
+const GLOBAL = new Set(['agents', 'contacts', 'diamonds', 'invites']); // the league-wide sub list; everything else belongs to one team
 
 export function createPlatform(sb, { session, teamId, role, profileName }) {
   const uid = session.user.id;
@@ -47,7 +47,14 @@ export function createPlatform(sb, { session, teamId, role, profileName }) {
     if (!loading.has(col)) loading.set(col, refetch(col).finally(() => loading.delete(col)));
     return loading.get(col);
   }
-  const fail = e => { const err = new Error(e.message || 'failed'); if (e.code === '42501' || /row-level security|not allowed/i.test(e.message || '')) err.code = 'not_granted'; return err; };
+  // database errors → something the app can show. Messages raised by our own checks (code P0001) are written for people.
+  const fail = e => {
+    const err = new Error(e.message || 'failed');
+    if (e.code === '42501' || /row-level security|not allowed/i.test(e.message || '')) err.code = 'not_granted';
+    if (e.code === 'P0001' && e.message && e.message.length < 120) err.userMessage = e.message;
+    return err;
+  };
+  const rpc = async (fn, args) => { const { error } = await sb.rpc(fn, args); if (error) throw fail(error); };
   const split = path => { const i = path.indexOf('/'); return [path.slice(0, i), path.slice(i + 1)]; };
 
   const db = {
@@ -78,6 +85,7 @@ export function createPlatform(sb, { session, teamId, role, profileName }) {
     collection(col) {
       return {
         async get() { await ensure(col); return colSnap(col); },
+        refresh: () => (loaded.has(col) ? refetch(col) : ensure(col)),  // re-read after something changed what we're allowed to see
         onSnapshot(fn, onErr) {
           if (!colSubs.has(col)) colSubs.set(col, new Set()); colSubs.get(col).add(fn);
           ensure(col).then(() => fn(colSnap(col)), e => onErr && onErr(e));
@@ -99,6 +107,9 @@ export function createPlatform(sb, { session, teamId, role, profileName }) {
   };
 
   return {
+    teamId,
+    claimPlayer: async pid => { await rpc('claim_player', { p_team: teamId, p_player: pid }); await refetch('players'); },
+    unclaimPlayer: async pid => { await rpc('unclaim_player', { p_team: teamId, p_player: pid }); await refetch('players'); },
     use: async name => (name === 'db' ? db : name === 'user' ? user : null),
     geocode,
     stop: () => { if (channel) sb.removeChannel(channel); channel = null; },
