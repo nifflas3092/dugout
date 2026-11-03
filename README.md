@@ -8,6 +8,8 @@ Team app for rec league slowpitch:
 - a team board
 - a league-wide sub finder with distance search
 - **game-day weather**: each upcoming game shows the forecast for its park and flags likely rain-outs, and the schedule tracks rained-out games until a makeup is scheduled
+- **Team messages**: one tap sends an RSVP reminder (with who hasn't answered), a rain-out notice or a makeup date to your team's WhatsApp or text group
+- **Scorekeeping**: outs per inning, who scored on each play, a per-game box score (AB, R, H, RBI, BB, HR) and season stats including runs
 - **Gear**: a used-equipment marketplace with photos, filters, and private messages between buyer and seller
 
 It's a plain website with no build step. People open it in a browser or add it to their home screen, where it works like an installed app. Data lives in [Supabase](https://supabase.com), a hosted Postgres database with sign-in. Hosting is free on Vercel or Netlify.

@@ -29,7 +29,7 @@ const fmtDate = d => { if (!d) return { m: '', d: '', w: '' }; const x = new Dat
 const fmtTime = t => { if (!t) return ''; const [h, m] = t.split(':').map(Number); return new Date(2000, 0, 1, h, m).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); };
 const sum = a => (a || []).reduce((s, v) => s + (+v || 0), 0);
 const rsvpOf = (gid, pid) => (st.rsvp[gid + '_' + pid] || {}).s || '';
-const defaultGame = () => { const g = sortedGames(); if (selGame && g.some(x => x.id === selGame)) return selGame; const up = g.find(x => x.date >= today() && x.status !== 'final'); return up ? up.id : (g.length ? g[g.length - 1].id : null); };
+const defaultGame = () => { const g = sortedGames().filter(x => x.status !== 'rainout'); if (selGame && g.some(x => x.id === selGame)) return selGame; const up = g.find(x => x.date >= today() && x.status !== 'final'); return up ? up.id : (g.length ? g[g.length - 1].id : null); };
 
 /* ---------- writes ---------- */
 async function write(fn, ok) {
@@ -103,7 +103,12 @@ function renderSchedule() {
   ${rained.length ? `<h2>Rained out</h2><p class="muted small" style="margin-top:-6px">${rained.length} this season${needMakeup.length ? ` · <b style="color:var(--out)">${needMakeup.length} still need${needMakeup.length === 1 ? 's' : ''} a makeup date</b>` : ' · all made up'}</p><div class="stack games">${[...needMakeup, ...rained.filter(g => g.makeup)].map(gameCard).join('')}</div>` : ''}
   ${past.length ? `<h2>Played</h2><div class="stack games">${past.reverse().map(gameCard).join('')}</div>` : ''}
   ${up.some(g => g.wx) ? `<p class="muted small" style="margin-top:16px">${CREDIT}. Forecasts change; your league makes the final call.</p>` : ''}`;
-  view.querySelectorAll('[data-rain]').forEach(b => b.addEventListener('click', () => confirmInline(b, 'Mark this game rained out?', () => write(() => db.doc('games/' + b.dataset.rain).update({ status: 'rainout', rainedAt: Date.now() }), 'Marked rained out. Schedule a makeup when you have a date.'))));
+  view.querySelectorAll('[data-rain]').forEach(b => b.addEventListener('click', () => confirmInline(b, 'Mark this game rained out?', async () => {
+    const id = b.dataset.rain;
+    if (await write(() => db.doc('games/' + id).update({ status: 'rainout', rainedAt: Date.now() }), 'Marked rained out')) { const g = st.games.find(x => x.id === id); if (g) shareSheet('Tell the team it’s rained out', rainMessage({ ...g, makeup: null })); }
+  })));
+  view.querySelectorAll('[data-tell]').forEach(b => b.addEventListener('click', () => { const g = st.games.find(x => x.id === b.dataset.tell); shareSheet(g.makeup ? 'Share the makeup date' : 'Tell the team it’s rained out', rainMessage(g)); }));
+  view.querySelectorAll('[data-remind]').forEach(b => b.addEventListener('click', () => shareSheet('Remind the team', reminderMessage(st.games.find(x => x.id === b.dataset.remind)))));
   view.querySelectorAll('[data-unrain]').forEach(b => b.addEventListener('click', () => write(() => db.doc('games/' + b.dataset.unrain).update({ status: 'scheduled' }), 'Back on the schedule')));
   view.querySelectorAll('[data-makeup]').forEach(b => b.addEventListener('click', () => { gameForm(null, st.games.find(g => g.id === b.dataset.makeup)); document.getElementById('gameForm').scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
   view.querySelectorAll('[data-rsvp]').forEach(b => b.addEventListener('click', () => setRsvp(b.dataset.g, b.dataset.p, b.dataset.v)));
@@ -148,9 +153,44 @@ function gameCard(g) {
     <div class="row">
       <button class="btn ghost small" type="button" data-go="lineup" data-g="${esc(g.id)}">Lineup</button>
       <button class="btn ghost small" type="button" data-go="score" data-g="${esc(g.id)}">${final ? 'Box score' : 'Keep score'}</button>
+      ${st.canEdit && !final ? `<button class="btn ghost small" type="button" data-remind="${esc(g.id)}">Remind team</button>` : ''}
       ${st.canEdit ? `<button class="btn ghost small" type="button" data-editgame="${esc(g.id)}">Edit</button>${!final && !(wx && wx.level !== 'ok') ? `<button class="btn ghost small" type="button" data-rain="${esc(g.id)}">Rained out</button>` : ''}<button class="btn danger small" type="button" data-delgame="${esc(g.id)}">Delete</button>` : ''}
     </div>
   </article>`;
+}
+/* send a ready-made message to the team's group chat: WhatsApp, text message, the phone's share menu, or copy */
+function shareSheet(title, text) {
+  const link = location.origin + location.pathname;
+  let d = document.getElementById('share'); if (d) d.remove();
+  d = document.createElement('dialog'); d.id = 'share'; d.className = 'menu'; d.setAttribute('aria-labelledby', 'shareT'); document.body.append(d);
+  d.innerHTML = `<div class="mhead"><h2 id="shareT">${esc(title)}</h2><button class="btn ghost small" type="button" data-x>Close</button></div>
+  <section><label for="shareTxt" class="small">Message <span class="muted">(edit it if you like)</span><textarea id="shareTxt" rows="6">${esc(text + '\n' + link)}</textarea></label>
+  <div class="share-grid">
+    ${navigator.share ? '<button class="btn cta" type="button" data-native>Share…</button>' : ''}
+    <button class="btn" type="button" data-wa>WhatsApp</button>
+    <button class="btn ghost" type="button" data-sms>Text message</button>
+    <button class="btn ghost" type="button" data-copy>Copy</button>
+  </div>
+  <p class="muted small" style="margin:10px 0 0">Opens your own WhatsApp or messages, so it goes to your team group from you.</p></section>`;
+  d.showModal();
+  const msg = () => d.querySelector('#shareTxt').value;
+  d.querySelector('[data-x]').onclick = () => d.close();
+  d.addEventListener('click', e => { if (e.target === d) d.close(); });
+  d.querySelector('[data-wa]').onclick = () => window.open('https://wa.me/?text=' + encodeURIComponent(msg()), '_blank', 'noopener');
+  d.querySelector('[data-sms]').onclick = () => { location.href = 'sms:?&body=' + encodeURIComponent(msg()); };
+  d.querySelector('[data-copy]').onclick = async e => { try { await navigator.clipboard.writeText(msg()); e.target.textContent = 'Copied'; } catch (_) { d.querySelector('#shareTxt').select(); } };
+  const n = d.querySelector('[data-native]'); if (n) n.onclick = async () => { try { await navigator.share({ text: msg() }); d.close(); } catch (_) {} };
+}
+const gameWhen = g => `${fmtDate(g.date).w} ${fmtDate(g.date).m} ${fmtDate(g.date).d}${g.time ? ', ' + fmtTime(g.time) : ''}`;
+function rainMessage(g, newMakeup = null) {
+  const mk = newMakeup || (g.makeup && st.games.find(x => x.id === g.makeup)), team = st.team?.name || 'Team';
+  return `🌧️ ${team}: ${gameWhen(g)} ${g.home ? 'vs' : '@'} ${g.opp}${g.field ? ' (' + g.field + ')' : ''} is RAINED OUT.` +
+    (mk ? `\n📅 Makeup: ${gameWhen(mk)}${mk.field ? ' at ' + mk.field : ''}. Tap In or Out in Dugout:` : `\nMakeup date to come. Details in Dugout:`);
+}
+function reminderMessage(g) {
+  const ins = st.players.filter(p => rsvpOf(g.id, p.id) === 'in').length, waiting = st.players.filter(p => !rsvpOf(g.id, p.id));
+  return `⚾ ${st.team?.name || 'Team'}: ${gameWhen(g)} ${g.home ? 'vs' : '@'} ${g.opp}${g.field ? ' at ' + g.field : ''}.\n` +
+    `${ins} in so far${ins < 10 ? `, need ${10 - ins} more` : ''}.` + (waiting.length ? `\nStill need answers from: ${waiting.map(p => p.name).join(', ')}.` : '') + `\nTap In or Out in Dugout:`;
 }
 function rainCard(g, d) {
   const mk = g.makeup && st.games.find(x => x.id === g.makeup);
@@ -163,7 +203,7 @@ function rainCard(g, d) {
         <div class="row" style="margin-top:6px"><span class="pill rain">🌧️ Rained out</span>${mk ? `<span class="pill in">Makeup ${esc(fmtDate(mk.date).w)} ${esc(fmtDate(mk.date).m)} ${esc(fmtDate(mk.date).d)}${mk.time ? ', ' + esc(fmtTime(mk.time)) : ''}</span>` : '<span class="pill warn">Needs a makeup</span>'}</div>
       </div>
     </div>
-    ${st.canEdit ? `<div class="row">${mk ? '' : `<button class="btn small" type="button" data-makeup="${esc(g.id)}">Schedule makeup</button>`}<button class="btn ghost small" type="button" data-unrain="${esc(g.id)}">Not rained out</button><button class="btn danger small" type="button" data-delgame="${esc(g.id)}">Delete</button></div>` : ''}
+    ${st.canEdit ? `<div class="row"><button class="btn cta small" type="button" data-tell="${esc(g.id)}">Tell the team</button>${mk ? '' : `<button class="btn small" type="button" data-makeup="${esc(g.id)}">Schedule makeup</button>`}<button class="btn ghost small" type="button" data-unrain="${esc(g.id)}">Not rained out</button><button class="btn danger small" type="button" data-delgame="${esc(g.id)}">Delete</button></div>` : ''}
   </article>`;
 }
 /* where a game is played, for the forecast: its diamond if one was picked, otherwise the team's home area */
@@ -208,7 +248,7 @@ function gameForm(g, makeupOf = null) {
       diamond: dia ? dia.id : null, lat: dia ? dia.lat : null, lng: dia ? dia.lng : null };
     if (!data.opp || !data.date) return;
     if (g) await write(() => db.doc('games/' + g.id).update(data), 'Game saved');
-    else if (makeupOf) { const id = uid(); await write(async () => { await db.doc('games/' + id).set({ ...data, makeupOf: makeupOf.id, status: 'scheduled', us: [], them: [], inning: 1, bi: 0 }); await db.doc('games/' + makeupOf.id).update({ makeup: id }); }, 'Makeup game scheduled'); }
+    else if (makeupOf) { const id = uid(); if (await write(async () => { await db.doc('games/' + id).set({ ...data, makeupOf: makeupOf.id, status: 'scheduled', us: [], them: [], inning: 1, bi: 0 }); await db.doc('games/' + makeupOf.id).update({ makeup: id }); }, 'Makeup game scheduled')) shareSheet('Share the makeup date', rainMessage(makeupOf, data)); }
     else await write(() => db.doc('games/' + uid()).set({ ...data, status: 'scheduled', us: [], them: [], inning: 1, bi: 0 }), 'Game added');
     box.innerHTML = '';
   });
@@ -278,13 +318,13 @@ function renderLineup() {
   }));
 }
 function gamePicker(gid) {
-  const g = sortedGames();
+  const g = sortedGames().filter(x => x.status !== 'rainout');  // rained-out games can't be scored or given a lineup
   return `<label for="gamePick" class="sr">Game</label><select id="gamePick" style="margin-bottom:12px">${g.map(x => `<option value="${esc(x.id)}"${x.id === gid ? ' selected' : ''}>${esc(fmtDate(x.date).w)} ${esc(fmtDate(x.date).m)} ${esc(fmtDate(x.date).d)} · ${x.home ? 'vs' : '@'} ${esc(x.opp)}${x.status === 'final' ? ' (final)' : ''}</option>`).join('')}</select>`;
 }
 function bindPicker() { const s = document.getElementById('gamePick'); if (s) s.addEventListener('change', () => { selGame = s.value; LS.set('game', selGame); render(); }); }
 
 /* --- Scorekeeper --- */
-let rbi = 0;
+let rbi = 0, scorers = [];   // runs on the play being entered, and which runners crossed the plate
 function renderScore() {
   const gid = defaultGame(), g = st.games.find(x => x.id === gid);
   if (!g) { view.innerHTML = `<h2>Score</h2><div class="panel empty">Add a game first.</div>`; return; }
@@ -294,23 +334,34 @@ function renderScore() {
   const batter = order.length ? order[(g.bi || 0) % order.length] : null, onDeck = order.length > 1 ? order[((g.bi || 0) + 1) % order.length] : null;
   const final = g.status === 'final', keep = st.canEdit && !final;
   const cell = (arr, i) => arr && arr[i] != null ? arr[i] : '';
+  const nowInn = g.inning || 1, innAbs = abs.filter(a => a.inn === nowInn);
+  const outs = innAbs.filter(a => ['OUT', 'K', 'SF'].includes(a.r)).length;
+  // who could score: anyone who reached base this inning and hasn't scored yet, newest first, then the batter
+  const scoredThisInn = new Set(innAbs.flatMap(a => a.scored || []));
+  const onBase = [...new Set(innAbs.filter(a => ['1B', '2B', '3B', 'BB', 'E'].includes(a.r)).map(a => a.p).reverse())].filter(p => !scoredThisInn.has(p));
+  const box = boxScore(abs);
   view.innerHTML = `<h2>${final ? 'Box score' : 'Keep score'}</h2>
   ${gamePicker(gid)}
   <div class="panel">
     <div class="scoreboard"><span class="vs">${esc(st.team?.name || 'Us')}</span><span class="big" aria-label="Our runs">${sum(g.us)}</span><span class="vs">${esc(g.opp)}</span><span class="big" aria-label="Their runs">${sum(g.them)}</span></div>
-    <div class="lineup-scroll"><table class="linescore"><thead><tr><th scope="col">Team</th>${Array.from({ length: innings }, (_, i) => `<th scope="col"${!final && i + 1 === g.inning ? ' style="color:var(--grass)"' : ''}>${i + 1}</th>`).join('')}<th scope="col">R</th></tr></thead>
+    <div class="lineup-scroll"><table class="linescore"><thead><tr><th scope="col">Team</th>${Array.from({ length: innings }, (_, i) => `<th scope="col"${!final && i + 1 === g.inning ? ' style="color:var(--gold)"' : ''}>${i + 1}</th>`).join('')}<th scope="col">R</th></tr></thead>
     <tbody><tr><th scope="row">Us</th>${Array.from({ length: innings }, (_, i) => `<td>${cell(g.us, i)}</td>`).join('')}<td><b>${sum(g.us)}</b></td></tr>
     <tr><th scope="row">Them</th>${Array.from({ length: innings }, (_, i) => `<td>${cell(g.them, i)}</td>`).join('')}<td><b>${sum(g.them)}</b></td></tr></tbody></table></div>
   </div>
+  ${box.length ? `<h3 style="margin-top:16px">${esc(st.team?.name || 'Our')} box score</h3>
+  <div class="lineup-scroll"><table><thead><tr><th scope="col">Batter</th>${['AB', 'R', 'H', 'RBI', 'BB', 'HR'].map(k => `<th scope="col" class="num">${k}</th>`).join('')}</tr></thead>
+  <tbody>${box.map(r => `<tr><td><b>${esc(pName(r.p))}</b></td>${['AB', 'R', 'H', 'RBI', 'BB', 'HR'].map(k => `<td class="num">${r[k]}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : ''}
   ${keep ? `
   <div class="panel" style="margin-top:12px">
-    <div class="row"><div class="grow"><div class="muted small">Inning ${esc(g.inning || 1)} · now batting</div><div class="atbat">${batter ? esc(pName(batter)) : 'No lineup'}</div>${onDeck ? `<div class="muted small">On deck: ${esc(pName(onDeck))}</div>` : ''}</div></div>
+    <div class="row"><div class="grow"><div class="muted small">Inning ${esc(nowInn)} · <span class="outs" aria-label="${outs} out${outs === 1 ? '' : 's'}">${[0, 1, 2].map(i => `<span class="${i < outs ? 'on' : ''}"></span>`).join('')}</span> ${Math.min(outs, 3)} out${outs === 1 ? '' : 's'} · now batting</div><div class="atbat">${batter ? esc(pName(batter)) : 'No lineup'}</div>${onDeck ? `<div class="muted small">On deck: ${esc(pName(onDeck))}</div>` : ''}</div></div>
     ${batter ? `<div class="row"><span class="grow small"><b>Runs scored on this play</b></span><div class="stepper"><button class="iconbtn" type="button" id="rbiM" aria-label="One fewer run">−</button><output id="rbiV" aria-live="polite">${rbi}</output><button class="iconbtn" type="button" id="rbiP" aria-label="One more run">+</button></div></div>
+    <div id="scorers"></div>
+    ${outs >= 3 ? `<p class="notice small" style="margin:8px 0">Three outs. Tap <b>Next inning</b> when the side is retired.</p>` : ''}
     <div class="result-grid">${RESULTS.map(r => `<button type="button" class="${esc(r.cls || '')}" data-res="${esc(r.k)}">${r.label}</button>`).join('')}</div>` : `<p class="muted">Build a lineup first, or mark players In on the Games tab.</p>`}
     <div class="row">
       <button class="btn ghost small" type="button" id="themM" aria-label="Take a run off their score this inning">Them −1</button>
       <button class="btn ghost small" type="button" id="themP">Them +1 run</button>
-      <button class="btn ghost small" type="button" id="nextInn">Next inning</button>
+      <button class="btn ${outs >= 3 ? 'cta' : 'ghost'} small" type="button" id="nextInn">Next inning</button>
       <button class="btn ghost small" type="button" id="undo" ${abs.length ? '' : 'disabled'}>Undo last at-bat</button>
       <button class="btn small" type="button" id="finish">Final</button>
     </div>
@@ -320,15 +371,27 @@ function renderScore() {
   bindPicker();
   if (!keep) { const ro = document.getElementById('reopen'); if (ro) ro.onclick = () => write(() => db.doc('games/' + g.id).update({ status: 'live' }), 'Game reopened'); return; }
   const inn = (g.inning || 1) - 1, setArr = (arr, d) => { const a = [...(arr || [])]; while (a.length <= inn) a.push(0); a[inn] = Math.max(0, (+a[inn] || 0) + d); return a; };
-  const rb = v => { rbi = Math.max(0, Math.min(4, rbi + v)); document.getElementById('rbiV').textContent = rbi; };
+  // pick which runners crossed the plate (as many as runs on the play)
+  const drawScorers = () => {
+    const box = document.getElementById('scorers'); if (!box) return;
+    scorers = scorers.filter(p => onBase.includes(p) || p === batter).slice(0, rbi);
+    if (!rbi) { box.innerHTML = ''; return; }
+    const who = [...onBase, ...(batter && !onBase.includes(batter) ? [batter] : [])];
+    box.innerHTML = `<fieldset class="scorers"><legend class="small"><b>Who scored?</b> <span class="muted">(pick ${rbi}, or skip)</span></legend><div class="row">${who.map(p => `<button type="button" class="chip-btn" data-scorer="${esc(p)}" aria-pressed="${scorers.includes(p)}">${esc(pName(p))}${p === batter ? ' (batter)' : ''}</button>`).join('') || '<span class="muted small">No one on base yet this inning.</span>'}</div></fieldset>`;
+    box.querySelectorAll('[data-scorer]').forEach(b => b.onclick = () => { const p = b.dataset.scorer; scorers = scorers.includes(p) ? scorers.filter(x => x !== p) : scorers.length < rbi ? [...scorers, p] : [...scorers.slice(1), p]; drawScorers(); });
+  };
+  const rb = v => { rbi = Math.max(0, Math.min(4, rbi + v)); document.getElementById('rbiV').textContent = rbi; drawScorers(); };
+  drawScorers();
   const m = document.getElementById('rbiM'); if (m) { m.onclick = () => rb(-1); document.getElementById('rbiP').onclick = () => rb(1); }
   view.querySelectorAll('[data-res]').forEach(b => b.addEventListener('click', async () => {
     const r = b.dataset.res, runs = r === 'HR' ? Math.max(1, rbi) : rbi;
+    let scored = scorers.slice(0, runs);
+    if (r === 'HR' && !scored.includes(batter)) scored = [...scored.slice(0, runs - 1), batter];   // the batter always scores on a homer
     const ok = await write(async () => {
-      await db.doc('ab/' + uid()).set({ g: g.id, p: batter, r, rbi: r === 'E' ? 0 : runs, runs, inn: g.inning || 1, at: Date.now() });
+      await db.doc('ab/' + uid()).set({ g: g.id, p: batter, r, rbi: r === 'E' ? 0 : runs, runs, scored, inn: g.inning || 1, at: Date.now() });
       await db.doc('games/' + g.id).update({ bi: (g.bi || 0) + 1, us: setArr(g.us, runs), status: 'live' });
     }, `${pName(batter)}: ${b.textContent}${runs ? `, ${runs} run${runs > 1 ? 's' : ''}` : ''}`);
-    if (ok) rbi = 0;
+    if (ok) { rbi = 0; scorers = []; }
   }));
   document.getElementById('themP').onclick = () => write(() => db.doc('games/' + g.id).update({ them: setArr(g.them, 1), status: 'live' }));
   document.getElementById('themM').onclick = () => write(() => db.doc('games/' + g.id).update({ them: setArr(g.them, -1) }));
@@ -341,14 +404,23 @@ function renderScore() {
 
 /* --- Stats --- */
 let statSort = LS.get('sort', 'AVG');
+/* one game's batting lines, in the order people first batted */
+function boxScore(abs) {
+  const order = [...new Set(abs.map(a => a.p))];
+  return order.map(p => {
+    const a = abs.filter(x => x.p === p), c = k => a.filter(x => x.r === k).length;
+    return { p, AB: a.length - c('BB') - c('SF'), R: abs.reduce((s, x) => s + ((x.scored || []).includes(p) ? 1 : 0), 0), H: c('1B') + c('2B') + c('3B') + c('HR'), RBI: a.reduce((s, x) => s + (x.rbi || 0), 0), BB: c('BB'), HR: c('HR') };
+  });
+}
 function statLine(pid) {
   const a = st.ab.filter(x => x.p === pid), c = k => a.filter(x => x.r === k).length;
   const H = c('1B') + c('2B') + c('3B') + c('HR'), BB = c('BB'), SF = c('SF'), AB = a.length - BB - SF, TB = c('1B') + 2 * c('2B') + 3 * c('3B') + 4 * c('HR');
   const G = new Set(a.map(x => x.g)).size, RBI = a.reduce((s, x) => s + (x.rbi || 0), 0);
-  return { G, PA: a.length, AB, H, '2B': c('2B'), '3B': c('3B'), HR: c('HR'), BB, RBI, AVG: AB ? H / AB : 0, OBP: (AB + BB + SF) ? (H + BB) / (AB + BB + SF) : 0, SLG: AB ? TB / AB : 0 };
+  const Rn = st.ab.reduce((s, x) => s + ((x.scored || []).includes(pid) ? 1 : 0), 0);
+  return { G, PA: a.length, AB, R: Rn, H, '2B': c('2B'), '3B': c('3B'), HR: c('HR'), BB, RBI, AVG: AB ? H / AB : 0, OBP: (AB + BB + SF) ? (H + BB) / (AB + BB + SF) : 0, SLG: AB ? TB / AB : 0 };
 }
 function renderStats() {
-  const cols = ['G', 'AB', 'H', '2B', '3B', 'HR', 'BB', 'RBI', 'AVG', 'OBP', 'SLG'];
+  const cols = ['G', 'AB', 'R', 'H', '2B', '3B', 'HR', 'BB', 'RBI', 'AVG', 'OBP', 'SLG'];
   const rows = st.players.map(p => ({ p, s: statLine(p.id) })).filter(r => r.s.PA).sort((a, b) => b.s[statSort] - a.s[statSort]);
   const f3 = v => v.toFixed(3).replace(/^0/, '');
   view.innerHTML = `<h2>Season stats</h2>
