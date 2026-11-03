@@ -24,7 +24,7 @@ if (!window.supabase || !window.supabase.createClient) {
   showGate(`<div class="panel"><h2>Can’t load Dugout</h2><p>Part of the app didn’t download. Check your connection and reload.</p></div>`);
   throw new Error('supabase-js did not load');
 }
-const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'pkce' } });
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit' } });
 
 // keep an invite code across the sign-in round trip (codes are letters and digits only)
 const params = new URLSearchParams(location.search);
@@ -44,17 +44,17 @@ function signInScreen() {
   showGate(`${pending ? `<div class="notice" style="margin-bottom:14px">You’ve been invited to a team. Sign in to join it.</div>` : ''}
   <form class="panel" id="signin">
     <h2>Sign in</h2>
-    <p class="muted">We’ll email you a code. No password to remember.</p>
+    <p class="muted">We’ll email you a sign-in link. No password to remember.</p>
     <label for="em">Email<input id="em" type="email" autocomplete="email" required maxlength="254"></label>
     <label for="nm">Your name <span class="muted small">(what teammates see)</span><input id="nm" type="text" maxlength="40" autocomplete="name"></label>
-    <div class="row"><button class="btn" type="submit">Email me a code</button></div>
+    <div class="row"><button class="btn" type="submit">Email me a sign-in link</button></div>
     <p class="small" id="msg" role="status"></p>
     <p class="small muted" style="margin:0">By signing in you agree to how we handle your information in our <a href="privacy.html">privacy policy</a>.</p>
   </form>
   <form class="panel" id="codeF" hidden>
-    <h2>Enter your code</h2>
+    <h2>Check your email</h2>
     <p class="muted" id="codeHelp"></p>
-    <label for="cd">Code from the email<input id="cd" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6,10}" maxlength="10" required style="letter-spacing:.2em;font-size:1.3em"></label>
+    <label for="cd">Code from the email <span class="muted small">(only if there is one)</span><input id="cd" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6,10}" maxlength="10" required style="letter-spacing:.2em;font-size:1.3em"></label>
     <div class="row"><button class="btn" type="submit">Sign in</button><button class="btn ghost" type="button" id="back">Use a different email</button></div>
     <p class="small" id="cMsg" role="status"></p>
   </form>`);
@@ -70,7 +70,7 @@ function signInScreen() {
     if (error) { msg.className = 'small err'; msg.textContent = /rate|seconds/i.test(error.message) ? 'Too many tries. Wait a minute and try again.' : 'Couldn’t send the email. Check the address and try again.'; return; }
     msg.textContent = '';
     signin.hidden = true; codeF.hidden = false;
-    document.getElementById('codeHelp').innerHTML = `We sent it to <b>${esc(email)}</b>. It can take a minute; check spam too. You can also tap the link in the email on this device.`;
+    document.getElementById('codeHelp').innerHTML = `We sent a link to <b>${esc(email)}</b>. Tap it to sign in. It can take a minute, so check spam too. If the email shows a 6-digit code instead, type it below.`;
     document.getElementById('cd').focus();
   });
   document.getElementById('back').onclick = () => { codeF.hidden = true; signin.hidden = false; };
