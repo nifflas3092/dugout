@@ -1,6 +1,6 @@
 /* Offline shell: the app's own files load instantly and work without signal at the diamond.
    Team data always comes fresh from the network. Bump VERSION whenever you deploy changes. */
-const VERSION = 'dugout-v8';
+const VERSION = 'dugout-v9';
 const SHELL = ['./', 'index.html', 'style.css', 'config.js', 'js/main.js', 'js/app.js', 'js/platform.js', 'js/weather.js', 'js/market.js', 'js/rules.js', 'manifest.webmanifest', 'privacy.html', 'icons/icon.svg', 'icons/icon-192.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim())); });

@@ -45,16 +45,26 @@ async function write(fn, ok) {
 }
 
 /* ---------- views ---------- */
+/* navigation: five groups, in the order a team uses them */
+const GROUP = { home: 'home', gameday: 'home', schedule: 'games', lineup: 'games', score: 'games', roster: 'team', stats: 'team', board: 'team', subs: 'subs', gear: 'gear' };
+const SUBNAV = { games: [['schedule', 'Schedule'], ['lineup', 'Lineup'], ['score', 'Score']], team: [['roster', 'Roster'], ['stats', 'Stats'], ['board', 'Board']] };
+function subnav(tab) {
+  const items = SUBNAV[GROUP[tab]]; if (!items) return;
+  view.insertAdjacentHTML('afterbegin', `<nav class="subnav" aria-label="${GROUP[tab] === 'games' ? 'Games' : 'Team'}">${items.map(([k, l]) => `<a href="#${k}"${k === tab ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`);
+}
 function render() {
-  const tab = (location.hash || '#schedule').slice(1);
-  document.querySelectorAll('nav.tabs a').forEach(a => a.setAttribute('aria-current', a.dataset.tab === tab ? 'page' : 'false'));
+  const tab = (location.hash || '#home').slice(1);
+  document.querySelectorAll('.tabs-main a').forEach(a => a.setAttribute('aria-current', a.dataset.group === (GROUP[tab] || 'home') ? 'page' : 'false'));
+  document.querySelectorAll('.tabs-side a').forEach(a => a.setAttribute('aria-current', a.dataset.tab === tab || (tab === 'gameday' && a.dataset.tab === 'home') ? 'page' : 'false'));
   header();
   if (!st.loaded.team && !st.offline) { view.innerHTML = `<div class="empty">Loading your team…</div>`; return; }
   if (tab === 'subs' && (st.loaded.team || st.offline)) return renderSubs();
   if (tab === 'gear' && (st.loaded.team || st.offline)) return renderGear(gearCtx());
   if (!st.team && !st.offline) return renderSetup();
   if (st.offline && !st.team) return renderOffline();
-  ({ gameday: renderGameday, subs: renderSubs, schedule: renderSchedule, lineup: renderLineup, score: renderScore, stats: renderStats, roster: renderRoster, board: renderBoard }[tab] || renderSchedule)();
+  const fn = ({ home: renderHome, gameday: renderGameday, subs: renderSubs, schedule: renderSchedule, lineup: renderLineup, score: renderScore, stats: renderStats, roster: renderRoster, board: renderBoard }[tab] || renderHome);
+  fn();
+  subnav(tab);
 }
 function header() {
   const t = st.team;
@@ -65,8 +75,8 @@ function header() {
   const w = fin.filter(g => sum(g.us) > sum(g.them)).length, l = fin.filter(g => sum(g.us) < sum(g.them)).length, tie = fin.length - w - l;
   document.getElementById('record').textContent = fin.length ? `${w}-${l}${tie ? '-' + tie : ''}` : '';
   renderNotice();
-  const badge = document.getElementById('gearBadge'), n = myId ? unreadCount(st, myId) : 0;
-  if (badge) { badge.textContent = n; badge.hidden = !n; badge.setAttribute('aria-label', `${n} unread`); }
+  const n = myId ? unreadCount(st, myId) : 0;
+  document.querySelectorAll('.gearBadge').forEach(badge => { badge.textContent = n; badge.hidden = !n; badge.setAttribute('aria-label', `${n} unread`); });
 }
 
 function renderOffline() {
@@ -97,6 +107,75 @@ function renderSetup() {
 }
 
 /* --- Games --- */
+/* ---------- Home: what's next, what you need to do, what's new ---------- */
+const SEAM = `<svg class="seam" viewBox="0 0 200 200" aria-hidden="true"><path d="M30 -10 C 95 40, 95 160, 30 210" /><path d="M170 -10 C 105 40, 105 160, 170 210" /></svg>`;
+function renderHome() {
+  const g = nextGame(), rules = RULES(), mine = me && st.players.find(p => p.id === me);
+  const fin = st.games.filter(x => x.status === 'final');
+  const w = fin.filter(x => sum(x.us) > sum(x.them)).length, l = fin.filter(x => sum(x.us) < sum(x.them)).length, t = fin.length - w - l;
+  const last = [...fin].sort((a, b) => (b.date + (b.time || '')).localeCompare(a.date + (a.time || '')))[0];
+  const myLine = me ? statLine(me) : null;
+  const f3 = v => v.toFixed(3).replace(/^0/, '');
+  // the matchup card
+  let hero;
+  if (!g) hero = `<section class="matchup empty-matchup">${SEAM}<p class="mu-when">No games on the schedule</p><h2 class="mu-vs">${st.canEdit ? 'Add your first game' : 'Nothing booked yet'}</h2>${st.canEdit ? `<a class="btn cta" href="#schedule">Add a game</a>` : '<p>Your captain will add games soon.</p>'}</section>`;
+  else {
+    const ins = st.players.filter(p => rsvpOf(g.id, p.id) === 'in'), my = me ? rsvpOf(g.id, me) : '';
+    const av = rules.coed ? availabilityCheck(ins, rules) : null, need = rules.field, wx = gameWeather(g), maps = mapsUrl(g);
+    const slots = Array.from({ length: Math.max(need, ins.length) }, (_, i) => i < ins.length ? (rules.coed ? (ins[i].g === 'w' ? 'w' : ins[i].g === 'm' ? 'm' : 'x') : 'x') : '');
+    hero = `<section class="matchup" aria-label="Next game">${SEAM}
+      <div class="mu-top"><span class="mu-when">${g.date === today() ? 'Game day' : esc(gameWhen(g).split(',')[0])}</span><span class="mu-count">${esc(untilText(g))}</span></div>
+      <h2 class="mu-vs"><span class="mu-side">${g.home ? 'vs' : 'at'}</span> ${esc(g.opp)}</h2>
+      <div class="mu-facts">
+        <span>${esc(fmtTime(g.time) || 'Time to be set')}</span>
+        <span>${esc(g.field || 'Field to be set')}${maps ? ` <a href="${esc(maps)}" target="_blank" rel="noopener">Directions</a>` : ''}</span>
+        ${wx ? `<span class="mu-wx mu-wx-${wx.level}">${wx.icon} ${esc(wx.temp)}°C, ${esc(wx.text.toLowerCase())}</span>` : ''}
+      </div>
+      ${me ? `<div class="mu-rsvp"><span class="mu-q">${my ? `You’re ${my === 'in' ? 'in' : my === 'out' ? 'out' : 'a maybe'}` : 'Are you in?'}</span>
+        <div class="mu-btns">${[['in', 'I’m in'], ['maybe', 'Maybe'], ['out', 'Can’t make it']].map(([v, lbl]) => `<button type="button" class="mu-btn mu-${v}" data-rsvp data-g="${esc(g.id)}" data-p="${esc(me)}" data-v="${v}" aria-pressed="${my === v}">${lbl}</button>`).join('')}</div></div>`
+      : `<a class="btn ghost-light" href="#schedule">Find your name to answer</a>`}
+      <div class="mu-squad"><div class="mu-slots" aria-hidden="true">${slots.map(sx => `<i class="${sx ? 'on ' + sx : ''}"></i>`).join('')}</div>
+        <span>${ins.length} of ${need} in${rules.coed ? `: ${ins.filter(p => p.g === 'm').length} men, ${ins.filter(p => p.g === 'w').length} women` : ''}</span></div>
+      ${av ? `<p class="mu-warn">${esc(av.text)}</p>` : ''}
+      <div class="mu-links"><a href="#gameday">Gameday view</a><a href="#lineup" data-golu="${esc(g.id)}">${g.lineup ? 'See the lineup' : st.canEdit ? 'Build the lineup' : 'Lineup'}</a></div>
+    </section>`;
+  }
+  // stat tiles
+  const tiles = [
+    `<div class="tile"><span class="tile-n">${fin.length ? `${w}–${l}${t ? '–' + t : ''}` : '0–0'}</span><span class="tile-l">Season record</span></div>`,
+    last ? `<div class="tile"><span class="tile-n">${sum(last.us)}–${sum(last.them)}</span><span class="tile-l">${sum(last.us) > sum(last.them) ? 'Won' : sum(last.us) < sum(last.them) ? 'Lost' : 'Tied'} ${last.home ? 'vs' : 'at'} ${esc(last.opp)}</span></div>` : '',
+    myLine && myLine.PA ? `<div class="tile"><span class="tile-n">${f3(myLine.AVG)}</span><span class="tile-l">Your average, ${myLine.H} hits</span></div>` : '',
+    myLine && myLine.PA ? `<div class="tile"><span class="tile-n">${myLine.RBI}</span><span class="tile-l">Your RBIs</span></div>` : '',
+  ].filter(Boolean);
+  // captain's to-do, in the order it matters before a game
+  const todo = [];
+  if (st.canEdit) {
+    if (!st.games.length) todo.push(['Add your schedule', 'Put your season’s games in so players can answer In or Out.', '#schedule', 'Add games']);
+    if (!st.players.length) todo.push(['Add your roster', 'Add players so they can claim their name and RSVP.', '#roster', 'Add players']);
+    if (rules.coed) { const unset = st.players.filter(p => !p.g); if (unset.length) todo.push([`Set Man or Woman for ${unset.length} player${unset.length === 1 ? '' : 's'}`, `${rules.short} lineups need it.`, '#roster', 'Open roster']); }
+    if (g) {
+      const waiting = st.players.filter(p => !rsvpOf(g.id, p.id));
+      if (waiting.length) todo.push([`${waiting.length} haven’t answered for ${gameWhen(g).split(',')[0]}`, waiting.slice(0, 4).map(p => p.name).join(', ') + (waiting.length > 4 ? ` and ${waiting.length - 4} more` : ''), null, 'Remind team', `data-remind="${esc(g.id)}"`]);
+      if (!g.lineup) todo.push(['Build the lineup', 'Dugout makes a fair one from everyone who’s in.', '#lineup', 'Build it', `data-golu="${esc(g.id)}"`]);
+    }
+    const mk = st.games.filter(x => x.status === 'rainout' && !x.makeup);
+    if (mk.length) todo.push([`${mk.length} rain-out${mk.length === 1 ? '' : 's'} need a makeup date`, mk.map(x => `${x.home ? 'vs' : 'at'} ${x.opp}`).join(', '), '#schedule', 'Schedule']);
+    if (st.team && st.team.lat == null) todo.push(['Turn on game forecasts', 'Add your home area so each game shows the weather.', '#roster', 'Add area']);
+  } else if (!me && st.players.length) todo.push(['Find your name on the roster', 'Tap This is me so you can answer In or Out.', '#schedule', 'Find me']);
+  const post = [...st.posts].sort((a, b) => (b.pin ? 1 : 0) - (a.pin ? 1 : 0) || b.at - a.at)[0];
+  const unread = myId ? unreadCount(st, myId) : 0;
+  view.innerHTML = `${hero}
+    ${tiles.length ? `<div class="tiles">${tiles.join('')}</div>` : ''}
+    ${todo.length ? `<section class="home-block"><h3>${st.canEdit ? 'Before the next game' : 'Get set up'}</h3><ul class="todo">${todo.map(([h, sub, href, cta, attr]) => `<li><span class="grow"><b>${esc(h)}</b><span class="muted small">${esc(sub)}</span></span>${href ? `<a class="btn small" href="${href}" ${attr || ''}>${cta}</a>` : `<button class="btn small" type="button" ${attr || ''}>${cta}</button>`}</li>`).join('')}</ul></section>` : ''}
+    <section class="home-block"><h3>From the team</h3>
+      ${post ? `<a class="home-post" href="#board"><b>${esc(post.text)}</b><span class="muted small">${post.pin ? 'Pinned' : esc(new Date(post.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }))}</span></a>` : `<a class="home-post" href="#board"><span class="muted">Nothing on the board yet. Post the first note.</span></a>`}
+      ${unread ? `<a class="home-post" href="#gear"><b>${unread} new gear message${unread === 1 ? '' : 's'}</b><span class="muted small">Open your inbox</span></a>` : ''}
+    </section>`;
+  view.querySelectorAll('.mu-btns [data-rsvp]').forEach(b => b.addEventListener('click', () => setRsvp(b.dataset.g, b.dataset.p, b.dataset.v)));
+  view.querySelectorAll('[data-remind]').forEach(b => b.addEventListener('click', () => shareSheet('Remind the team', reminderMessage(st.games.find(x => x.id === b.dataset.remind)))));
+  view.querySelectorAll('[data-golu]').forEach(a => a.addEventListener('click', () => { selGame = a.dataset.golu; LS.set('game', selGame); }));
+}
+
 /* ---------- Gameday: the three things you need walking in from the parking lot ---------- */
 const nextGame = () => sortedGames().find(g => g.status !== 'final' && g.status !== 'rainout' && g.date >= today());
 const posAt = (L, i, pid) => (L && L.field[i] ? FPOS().find(k => L.field[i][k] === pid) : null) || 'BN';
@@ -687,7 +766,7 @@ async function renderBoard() {
   view.querySelectorAll('[data-delpost]').forEach(b => b.addEventListener('click', () => confirmInline(b, 'Delete post?', () => write(() => db.doc('posts/' + b.dataset.delpost).delete(), 'Post deleted'))));
   view.querySelectorAll('[data-pin]').forEach(b => b.addEventListener('click', () => { const p = st.posts.find(x => x.id === b.dataset.pin); write(() => db.doc('posts/' + p.id).update({ pin: !p.pin })); }));
   const ids = [...new Set(st.posts.map(p => p.u).filter(Boolean))].filter(id => !(id in names));
-  if (user && ids.length) { try { const ps = await user.profiles(ids); ids.forEach(id => names[id] = (ps[id] && ps[id].name) || 'Teammate'); if ((location.hash || '').slice(1) === 'board') renderBoard(); } catch (_) {} }
+  if (user && ids.length) { try { const ps = await user.profiles(ids); ids.forEach(id => names[id] = (ps[id] && ps[id].name) || 'Teammate'); if ((location.hash || '').slice(1) === 'board') render(); } catch (_) {} }
 }
 
 /* ---------- Subs: a pool of players looking to fill in, searchable by captains ---------- */
