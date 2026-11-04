@@ -315,6 +315,13 @@ async def main():
     await pl.fill('#mDelT','DELETE'); await pl.click('#mDel .btn'); await pl.wait_for_timeout(800)
     gone=await cap.evaluate("(()=>{const d=JSON.parse(localStorage.getItem('fake-sb-db'));return !d.team_members.some(m=>m.user_id==='u-pl') && !d.docs.some(x=>x.id==='u-pl')})()")
     check('after deleting, membership, profile and sub data are gone', gone)
+    # ---- Profile → Teams: see every team you're on and switch
+    await cap.goto('http://localhost:8766/?teams'); await cap.wait_for_selector('#newF'); await cap.fill('#tn','Second Squad'); await cap.click('#newF .btn.cta')
+    await cap.wait_for_selector('#app:not([hidden])'); await cap.goto('http://localhost:8766/#teams'); await cap.wait_for_selector('.team-card'); await cap.wait_for_timeout(500)
+    check('Profile tab replaces Team, and Teams lists every team you’re on', 'Profile' in await cap.inner_text('.tabs-main') and await cap.locator('.team-card').count()==2 and 'Current team' in await cap.inner_text('.team-card.current'))
+    await cap.set_viewport_size({'width':400,'height':860}); await cap.screenshot(path=OUT+'v9_teams.png', full_page=True); await cap.set_viewport_size({'width':1280,'height':860})
+    await cap.click('[data-swap]'); await cap.wait_for_timeout(1200); await cap.wait_for_selector('#app:not([hidden])')
+    check('Switch to this team opens that team', 'Riverside Rally' in await cap.inner_text('#teamTitle'))
     csp=[e for e in errs if 'Content Security Policy' in e or 'Refused' in e]
     check('no Content Security Policy violations', not csp)
     print('ERRORS', errs)

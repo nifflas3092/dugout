@@ -257,6 +257,10 @@ async function openTeam(session, account, team, teams) {
   const { data: prof } = await sb.from('profiles').select('display_name').eq('id', session.user.id).maybeSingle();
   const platform = createPlatform(sb, { session, teamId: team.id, role: team.role, profileName: prof?.display_name || '', account });
   platform.upgrade = () => checkout('captain');
+  platform.team = team;
+  platform.myTeams = async () => { try { teams = await myTeams(session.user.id); } catch (_) {} return teams; };
+  platform.switchTeam = id => { LS.set('team', id); location.href = location.pathname + '#home'; location.reload(); };
+  platform.otherTeams = () => { location.href = location.pathname + '?teams'; };
   platform.removeAds = () => checkout('adfree');
   platform.openMenu = section => teamMenu(session, account, team, teams, prof?.display_name || '', section);
   gate.hidden = true; appEl.hidden = false;

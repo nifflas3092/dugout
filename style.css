@@ -567,7 +567,6 @@ details > summary { cursor: pointer; min-height: 40px; display: flex; align-item
 /* icons: one line style, sized to the text around them */
 .ic { width: 1.2em; height: 1.2em; flex: none; vertical-align: -0.25em; }
 .ic-lg { width: 1.6em; height: 1.6em; }
-nav.tabs a svg.ic { width: 24px; height: 24px; vertical-align: 0; }
 .chip-btn .ic { margin-right: 6px; width: 1.15em; height: 1.15em; }
 .chip-btn:has(.ic) { display: inline-flex; align-items: center; }
 .wx-icon { font-size: 1em; display: inline-flex; color: inherit; }
@@ -578,3 +577,7 @@ nav.tabs a svg.ic { width: 24px; height: 24px; vertical-align: 0; }
 .gd-field .ic { color: var(--grass); }
 .notice-bar > .ic { flex: none; }
 .pw-eye .ic { width: 20px; height: 20px; }
+/* Profile → Teams */
+.team-card .crest { width: 44px; height: 44px; font-size: 18px; }
+.team-card.current { border-color: var(--grass); border-width: 2px; }
+.team-card .btn .ic, .team-card .pill .ic { margin-right: 4px; }

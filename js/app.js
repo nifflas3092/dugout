@@ -48,12 +48,12 @@ async function write(fn, ok) {
 
 /* ---------- views ---------- */
 /* navigation: five groups, in the order a team uses them */
-const GROUP = { home: 'home', gameday: 'home', schedule: 'games', lineup: 'games', score: 'games', roster: 'team', stats: 'team', chat: 'team', board: 'team', subs: 'league', diamonds: 'league', gear: 'gear' };
-const SUBNAV = { games: [['schedule', 'Schedule'], ['lineup', 'Lineup'], ['score', 'Score']], team: [['roster', 'Roster'], ['chat', 'Chat'], ['stats', 'Stats'], ['board', 'Board']], league: [['subs', 'Subs'], ['diamonds', 'Diamonds']] };
+const GROUP = { home: 'home', gameday: 'home', schedule: 'games', lineup: 'games', score: 'games', teams: 'team', roster: 'team', stats: 'team', chat: 'team', board: 'team', subs: 'league', diamonds: 'league', gear: 'gear' };
+const SUBNAV = { games: [['schedule', 'Schedule'], ['lineup', 'Lineup'], ['score', 'Score']], team: [['teams', 'Teams'], ['roster', 'Roster'], ['chat', 'Chat'], ['stats', 'Stats'], ['board', 'Board']], league: [['subs', 'Subs'], ['diamonds', 'Diamonds']] };
 function subnav(tab) {
   const items = SUBNAV[GROUP[tab]]; if (!items) return;
   const unread = chatUnread();
-  view.insertAdjacentHTML('afterbegin', `<nav class="subnav" aria-label="${({ games: 'Games', team: 'Team', league: 'League' })[GROUP[tab]]}">${items.map(([k, l]) => `<a href="#${k}"${k === tab ? ' aria-current="page"' : ''}>${l}${k === 'chat' && unread && tab !== 'chat' ? ` <span class="badge" aria-label="${unread} new">${unread}</span>` : ''}</a>`).join('')}</nav>`);
+  view.insertAdjacentHTML('afterbegin', `<nav class="subnav" aria-label="${({ games: 'Games', team: 'Profile', league: 'League' })[GROUP[tab]]}">${items.map(([k, l]) => `<a href="#${k}"${k === tab ? ' aria-current="page"' : ''}>${l}${k === 'chat' && unread && tab !== 'chat' ? ` <span class="badge" aria-label="${unread} new">${unread}</span>` : ''}</a>`).join('')}</nav>`);
 }
 function render() {
   const tab = (location.hash || '#home').slice(1);
@@ -66,7 +66,7 @@ function render() {
   if (tab === 'gear' && (st.loaded.team || st.offline)) { const r = renderGear(gearCtx()); houseAd(); return r; }
   if (!st.team && !st.offline) return renderSetup();
   if (st.offline && !st.team) return renderOffline();
-  const fn = ({ home: renderHome, gameday: renderGameday, subs: renderSubs, schedule: renderSchedule, lineup: renderLineup, score: renderScore, stats: renderStats, roster: renderRoster, board: renderBoard, chat: renderChat }[tab] || renderHome);
+  const fn = ({ home: renderHome, gameday: renderGameday, subs: renderSubs, schedule: renderSchedule, lineup: renderLineup, score: renderScore, stats: renderStats, roster: renderRoster, board: renderBoard, chat: renderChat, teams: renderTeams }[tab] || renderHome);
   fn();
   subnav(tab);
   if (['home', 'schedule', 'stats', 'roster', 'board'].includes(tab)) houseAd();
@@ -1050,6 +1050,25 @@ function confirmInline(btn, q, go) {
 }
 
 /* sample team for trying it out, clearly labeled */
+
+/* ---------- Profile → Teams: every team you're on, and switching between them ---------- */
+let teamList = null;
+function renderTeams() {
+  const cur = platform.team || {}, list = teamList || [cur].filter(t => t.id);
+  view.innerHTML = `<h2>Your teams</h2>
+  <p class="muted small" style="margin-top:-6px">${list.length === 1 ? 'You’re on one team.' : `You’re on ${list.length} teams.`} Switch any time; your RSVPs, chat and stats stay with each team.</p>
+  <div class="stack team-cards">${list.map(t => { const here = t.id === cur.id;
+    return `<article class="panel team-card${here ? ' current' : ''}">
+      <div class="row"><div class="crest" aria-hidden="true">${esc((t.name || '?').trim().slice(0, 2).toUpperCase())}</div>
+        <div class="grow"><b class="vs" style="font-size:1.2em">${esc(t.name)}</b><div class="muted small">${t.role === 'captain' ? 'Captain' : 'Player'}${here && st.team?.league ? ' · ' + esc(st.team.league) : ''}</div></div>
+        ${here ? `<span class="pill in">${icon('pennant')} Current team</span>` : `<button class="btn small" type="button" data-swap="${esc(t.id)}">${icon('swap')} Switch to this team</button>`}</div>
+    </article>`; }).join('')}</div>
+  <div class="row" style="margin-top:14px"><button class="btn ghost" type="button" id="joinMore">${icon('pennant')} Join or start another team</button><button class="btn ghost" type="button" id="teamMenu">Team settings and invites</button></div>`;
+  view.querySelectorAll('[data-swap]').forEach(b => b.onclick = () => { b.disabled = true; b.textContent = 'Switching…'; platform.switchTeam(b.dataset.swap); });
+  document.getElementById('joinMore').onclick = () => platform.otherTeams();
+  document.getElementById('teamMenu').onclick = () => platform.openMenu && platform.openMenu();
+  if (!teamList && platform.myTeams) platform.myTeams().then(ts => { teamList = ts; if ((location.hash || '') === '#teams') render(); });
+}
 
 /* ---------- team chat ---------- */
 const chatKey = () => 'chatSeen-' + (platform.teamId || '') + '-' + (myId || '');
