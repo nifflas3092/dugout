@@ -27,16 +27,17 @@ export function createPlatform(sb, { session, teamId, role, profileName, account
 
   function live() {
     if (channel) return;
-    channel = sb.channel('docs-' + teamId)
+    channel = sb.channel('docs-' + (teamId || 'solo-' + uid))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'docs' }, p => {
         const row = p.eventType === 'DELETE' ? p.old : p.new;
-        if (!row || (row.scope !== teamId && row.scope !== 'global') || !loaded.has(row.col)) return;
+        if (!row || ((!teamId || row.scope !== teamId) && row.scope !== 'global') || !loaded.has(row.col)) return;
         if (row.scope !== scopeOf(row.col)) return;
         put(row.col, row.id, p.eventType === 'DELETE' ? undefined : row.data);
       })
       .subscribe(status => { if (status === 'SUBSCRIBED') for (const col of loaded) refetch(col); }); // catch anything missed while reconnecting
   }
   async function refetch(col) {
+    if (!scopeOf(col)) { cache.set(col, new Map()); loaded.add(col); emit(col, null); return; } // not on a team: nothing team-only to load
     const { data, error } = await sb.from('docs').select('id,data').eq('scope', scopeOf(col)).eq('col', col);
     if (error) throw error;
     const m = new Map(); data.forEach(r => m.set(r.id, r.data)); cache.set(col, m); loaded.add(col); emit(col, null);

@@ -4,7 +4,7 @@ import asyncio, subprocess, json, sys, re
 from playwright.async_api import async_playwright
 import os
 HERE=os.path.dirname(os.path.abspath(__file__)); APP=os.path.abspath(os.path.join(HERE,'..','..')); FAKE=open(os.path.join(HERE,'fake-supabase.js')).read(); OUT=os.path.join(HERE,'screenshots')+'/'; os.makedirs(OUT,exist_ok=True)
-CFG="export const SUPABASE_URL='https://fake.supabase.co';export const SUPABASE_ANON_KEY='x';export const GEOCODER='nominatim';export const MAPBOX_TOKEN='';export const CAPTAIN_PRICE='$5/month';export const ADFREE_PRICE='$7.99';"
+CFG="export const SUPABASE_URL='https://fake.supabase.co';export const SUPABASE_ANON_KEY='x';export const GEOCODER='nominatim';export const MAPBOX_TOKEN='';export const CAPTAIN_PRICE='$5/month';export const ADFREE_PRICE='$7.99';export const GOOGLE_MAPS_KEY='';"
 INDEX=re.sub(r' integrity="[^"]+"','',open(APP+'/index.html').read())  # the test double can't match the real library's hash
 srv=subprocess.Popen([sys.executable,'-m','http.server','8766','-d',APP],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 errs=[]; checks=[]
@@ -47,18 +47,31 @@ async def main():
     check('short password refused with a clear message', '8 characters' in await cap.inner_text('#msg') and await cap.get_attribute('#pw','aria-invalid')=='true')
     await cap.click('#signupF .pw-eye'); check('show-password button reveals the password', await cap.get_attribute('#pw','type')=='text' and await cap.get_attribute('#signupF .pw-eye','aria-pressed')=='true')
     await cap.fill('#pw','blue-glove-sunday'); await cap.screenshot(path=OUT+'v8_signup.png'); await cap.click('#signupF .btn.cta')
-    await cap.wait_for_selector('.upgrade [data-upgrade]')
-    check('new accounts start as players: no Start a team form, an upgrade offer instead', await cap.locator('#newF').count()==0 and '$5/month' in await cap.inner_text('.upgrade'))
-    await cap.screenshot(path=OUT+'v8_player_teams.png', full_page=True)
-    await cap.click('#so'); await cap.wait_for_selector('#loginF')
+    await cap.wait_for_selector('#goSub')
+    t=await cap.inner_text('#view')
+    check('new accounts go straight into the app without a team: sub sign-up first, join or start a team', 'Sign up to sub' in t and 'Join a team' in t and 'Become a captain' in t)
+    await cap.screenshot(path=OUT+'v11_noteam_home.png', full_page=True)
+    await cap.goto('http://localhost:8766/#schedule'); await cap.wait_for_timeout(300)
+    check('team-only screens explain you need a team', 'Join a team to see the schedule' in await cap.inner_text('#view'))
+    await cap.goto('http://localhost:8766/#gear'); await cap.wait_for_timeout(400)
+    check('Gear works without a team', await cap.locator('#gearBody, .gear-card, [data-gm]').count()>0)
+    await cap.goto('http://localhost:8766/#home'); await cap.wait_for_selector('#goSub'); await cap.click('#goSub'); await cap.wait_for_selector('#af')
+    await cap.fill('#aName','Casey Sub'); await cap.click('#aSave')
+    for _ in range(30):
+      if await cap.evaluate("JSON.parse(localStorage.getItem('fake-sb-db')).docs.some(d=>d.col==='agents'&&d.data.name==='Casey Sub')"): break
+      await cap.wait_for_timeout(200)
+    check('a sub with no team can join the sub list', await cap.evaluate("JSON.parse(localStorage.getItem('fake-sb-db')).docs.some(d=>d.col==='agents'&&d.data.name==='Casey Sub')"))
+    await cap.click(".tools .chip-btn:has-text('Menu')"); await cap.wait_for_selector('dialog.menu[open]')
+    check('menu without a team has no invite or members section', await cap.locator('#mShare, #mLeave').count()==0 and 'Join or start a team' in await cap.inner_text('dialog.menu'))
+    await cap.click('#mOut'); await cap.wait_for_selector('#loginF')
     await cap.fill('#em','cap@x.com'); await cap.fill('#pw','wrong-password'); await cap.click('#loginF .btn.cta'); await cap.wait_for_timeout(300)
     check('wrong password: clear message', 'don’t match' in await cap.inner_text('#msg'))
     await cap.click('#forgot'); await cap.wait_for_selector('#resetF'); await cap.fill('#em','cap@x.com'); await cap.click('#resetF .btn.cta'); await cap.wait_for_timeout(200)
     check('forgot password sends a reset link (same answer whether or not the account exists)', 'reset link is on its way' in await cap.inner_text('#msg') and await cap.evaluate('window.__reset')=='cap@x.com')
     await cap.click('#back'); await cap.wait_for_selector('#loginF')
     await cap.fill('#em','cap@x.com'); await cap.fill('#pw','blue-glove-sunday'); await cap.click('#loginF .btn.cta')
-    await cap.wait_for_selector('.upgrade [data-upgrade]'); check('logging back in with the password works', True)
-    await cap.click('.upgrade [data-upgrade]'); await cap.wait_for_selector('#newF')
+    await cap.wait_for_selector('#goStart'); check('logging back in with the password works', True)
+    await cap.click('#goStart'); await cap.wait_for_selector('#newF')
     check('after paying, the captain can start a team', 'captain now' in (await cap.inner_text('.gate')).lower())
     await cap.set_viewport_size({'width':1280,'height':860})
     await cap.fill('#tn','Riverside Rally'); await cap.click('#newF .btn'); await cap.wait_for_selector('#app:not([hidden])'); await cap.wait_for_timeout(300)
@@ -129,12 +142,14 @@ async def main():
     await pl.wait_for_timeout(300); await pl.click('text=I\'m in'); await pl.wait_for_timeout(900)
     await cap.wait_for_timeout(500); t=await cap.inner_text('#subBody')
     check('after yes, captain sees contact', '416-555-0100' in t)
+    await pl.wait_for_timeout(300); t2=await pl.inner_text('#subBody')
+    check('answered requests move to Invite history', 'Invite history' in t2 and 'You said yes' in t2 and 'Requests from captains' not in t2)
     await cap.screenshot(path=OUT+'v2_5_contact.png', full_page=True)
 
     # ---- online now, sub list gate, ads, team chat, schedule import
     await pl.evaluate("localStorage.setItem('fake-sb-db', (()=>{const d=JSON.parse(localStorage.getItem('fake-sb-db'));d.seen=d.seen||{};d.seen['u-pl']=Date.now();return JSON.stringify(d)})())")
     await cap.goto('http://localhost:8766/#subs'); await cap.wait_for_timeout(700)
-    check('captain sees a green online light on a sub who has the app open', await cap.locator('.agent .on-avatar').count()==1 and 'Online now' in await cap.inner_text('#subBody'), await cap.evaluate("(async()=>{const d=JSON.parse(localStorage.getItem('fake-sb-db'));return JSON.stringify([d.seen, d.docs.filter(x=>x.col==='agents').map(x=>[x.id,x.data.hideOnline]), d.accounts])})()"))
+    check('captain sees a green online light on a sub who has the app open', await cap.locator('.agent[aria-label="Jordan"] .on-avatar').count()==1, await cap.evaluate("(async()=>{const d=JSON.parse(localStorage.getItem('fake-sb-db'));return JSON.stringify([d.seen, d.docs.filter(x=>x.col==='agents').map(x=>[x.id,x.data.hideOnline]), d.accounts])})()"))
     await cap.screenshot(path=OUT+'v8_online.png', full_page=True)
     await pl.goto('http://localhost:8766/#subs'); await pl.wait_for_timeout(400); await pl.click('[data-mode=find]'); await pl.wait_for_timeout(300)
     check('free players get an upgrade card instead of the master sub list', 'for captains' in await pl.inner_text('#subBody') and await pl.locator('.agent').count()==0)
@@ -322,6 +337,11 @@ async def main():
     await cap.set_viewport_size({'width':400,'height':860}); await cap.screenshot(path=OUT+'v9_teams.png', full_page=True); await cap.set_viewport_size({'width':1280,'height':860})
     await cap.click('[data-swap]'); await cap.wait_for_timeout(1200); await cap.wait_for_selector('#app:not([hidden])')
     check('Switch to this team opens that team', 'Riverside Rally' in await cap.inner_text('#teamTitle'))
+    # ---- desktop screens at common sizes (for layout checks)
+    for w,h in [(2560,1440),(1920,1080),(1366,768),(1280,720)]:
+      await cap.set_viewport_size({'width':w,'height':h}); await cap.goto('http://localhost:8766/#home'); await cap.wait_for_timeout(700)
+      await cap.screenshot(path=OUT+f'v10_desk_{w}.png')
+    await cap.set_viewport_size({'width':1280,'height':860})
     csp=[e for e in errs if 'Content Security Policy' in e or 'Refused' in e]
     check('no Content Security Policy violations', not csp)
     print('ERRORS', errs)

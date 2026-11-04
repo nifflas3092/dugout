@@ -212,6 +212,7 @@ async function afterSignIn(session) {
   const pick = teams.find(t => t.id === LS.get('team'));
   if (pick) return openTeam(session, account, pick, teams);
   if (teams.length === 1) return openTeam(session, account, teams[0], teams);
+  if (!teams.length) return openTeam(session, account, null, teams);     // not on a team yet: straight in, as a sub
   teamsScreen(session, account, '', teams);
 }
 
@@ -229,7 +230,10 @@ async function teamsScreen(session, account, note = '', teams) {
     <p class="muted small" style="margin-top:-4px">Dugout builds lineups and keeps score by these rules. You can change it later.</p>
     <div class="row"><button class="btn cta" type="submit">Create team</button></div><p class="small err" id="nMsg" role="status"></p></form>`
     : upgradeCard('Want to run your own team? Captains start teams, invite players and get the full sub list.')}
+  <div class="panel"><h2>No team? No problem</h2><p class="muted">Sign up to sub, buy and sell gear, find diamonds and play Slowpitch Showdown. Join a team any time.</p>
+    <div class="row"><button class="btn ghost" type="button" id="solo">Use Dugout without a team</button></div></div>
   <p class="small muted">Signed in as ${esc(session.user.email)}. <button class="chip-btn" type="button" id="so">Log out</button></p>`);
+  document.getElementById('solo').onclick = () => { LS.set('team', null); openTeam(session, account, null, teams); };
   bindUpgrade(gate);
   gate.querySelectorAll('[data-team]').forEach(b => b.onclick = () => openTeam(session, account, teams.find(t => t.id === b.dataset.team), teams));
   document.getElementById('so').onclick = () => sb.auth.signOut();
@@ -253,9 +257,9 @@ async function teamsScreen(session, account, note = '', teams) {
 }
 
 async function openTeam(session, account, team, teams) {
-  LS.set('team', team.id);
+  if (team) LS.set('team', team.id);
   const { data: prof } = await sb.from('profiles').select('display_name').eq('id', session.user.id).maybeSingle();
-  const platform = createPlatform(sb, { session, teamId: team.id, role: team.role, profileName: prof?.display_name || '', account });
+  const platform = createPlatform(sb, { session, teamId: team ? team.id : null, role: team ? team.role : 'player', profileName: prof?.display_name || '', account });
   platform.upgrade = () => checkout('captain');
   platform.team = team;
   platform.myTeams = async () => { try { teams = await myTeams(session.user.id); } catch (_) {} return teams; };
@@ -276,20 +280,20 @@ async function openTeam(session, account, team, teams) {
 async function teamMenu(session, account, team, teams, myName, section) {
   let dlg = document.getElementById('menu'); if (dlg) dlg.remove();
   dlg = document.createElement('dialog'); dlg.id = 'menu'; dlg.className = 'menu'; dlg.setAttribute('aria-labelledby', 'menuT'); document.body.append(dlg);
-  const me = session.user.id, cap = team.role === 'captain';
-  const link = `${location.origin}${location.pathname}?join=${encodeURIComponent(team.join_code)}`;
-  const { data: members } = await sb.from('team_members').select('user_id, role, profiles(display_name)').eq('team_id', team.id).order('joined_at');
+  const me = session.user.id, cap = !!team && team.role === 'captain';
+  const link = team ? `${location.origin}${location.pathname}?join=${encodeURIComponent(team.join_code)}` : '';
+  const { data: members } = team ? await sb.from('team_members').select('user_id, role, profiles(display_name)').eq('team_id', team.id).order('joined_at') : { data: [] };
   const list = members || [];
   const feed = account.cal_token ? `${SUPABASE_URL}/functions/v1/calendar?t=${account.cal_token}` : '';
   const webcal = feed.replace(/^https:/, 'webcal:');
   const planLine = account.captain ? (account.grandfathered ? 'Captain (free, from before paid plans)' : `Captain, ${esc(CAPTAIN_PRICE)}${account.captain_until ? `. Renews ${esc(new Date(account.captain_until).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }))}` : ''}`) : 'Player (free)';
   dlg.innerHTML = `<div class="mhead"><h2 id="menuT">Menu</h2><button class="btn ghost small" type="button" id="mClose">Close</button></div>
   <p class="small err" id="mErr" role="alert" style="margin:0;padding:0 16px"></p>
-  <section><h3>${esc(team.name)}: invite players</h3>
+  ${team ? `  <section><h3>${esc(team.name)}: invite players</h3>
     <p class="small muted" style="margin:0 0 8px">Send this link in your team chat. Anyone with it can join as a player.</p>
     <div class="mrow"><span class="grow">Code <code>${esc(team.join_code)}</code></span><button class="btn small" type="button" id="mShare">${navigator.share ? 'Share link' : 'Copy link'}</button></div>
     ${cap ? `<div class="mrow"><span class="grow small muted">Link shared somewhere it shouldn’t be?</span><button class="btn ghost small" type="button" id="mNewCode">New code</button></div>` : ''}</section>
-  <section><h3>Members</h3>${list.map(m => `<div class="mrow"><span class="grow">${esc(m.profiles?.display_name || 'Player')}${m.user_id === me ? ' (you)' : ''}</span><span class="muted small">${m.role === 'captain' ? 'Captain' : 'Player'}</span>${cap && m.user_id !== me ? `<button class="btn ghost small" type="button" data-role="${esc(m.user_id)}" data-to="${m.role === 'captain' ? 'player' : 'captain'}">${m.role === 'captain' ? 'Make player' : 'Make co-captain'}</button><button class="btn danger small" type="button" data-kick="${esc(m.user_id)}">Remove</button>` : ''}</div>`).join('')}</section>
+  <section><h3>Members</h3>${list.map(m => `<div class="mrow"><span class="grow">${esc(m.profiles?.display_name || 'Player')}${m.user_id === me ? ' (you)' : ''}</span><span class="muted small">${m.role === 'captain' ? 'Captain' : 'Player'}</span>${cap && m.user_id !== me ? `<button class="btn ghost small" type="button" data-role="${esc(m.user_id)}" data-to="${m.role === 'captain' ? 'player' : 'captain'}">${m.role === 'captain' ? 'Make player' : 'Make co-captain'}</button><button class="btn danger small" type="button" data-kick="${esc(m.user_id)}">Remove</button>` : ''}</div>`).join('')}</section>` : ''}
   <section id="mPlan"><h3>Your plan</h3>
     <div class="mrow"><span class="grow"><b>${planLine}</b>${account.adFree && !account.captain ? '<span class="muted small" style="display:block">No ads, for good</span>' : ''}</span>
       ${account.captain && !account.grandfathered ? '<button class="btn ghost small" type="button" id="mManage">Manage plan</button>' : !account.captain ? `<button class="btn cta small" type="button" data-upgrade>Captain ${esc(CAPTAIN_PRICE)}</button>` : ''}</div>
@@ -299,8 +303,8 @@ async function teamMenu(session, account, team, teams, myName, section) {
     ${feed ? `<div class="mrow"><a class="btn small" href="https://calendar.google.com/calendar/r?cid=${encodeURIComponent(webcal)}" target="_blank" rel="noopener">Google Calendar</a><a class="btn ghost small" href="${esc(webcal)}">Apple or Outlook</a><button class="btn ghost small" type="button" id="mCopyCal">Copy link</button></div>
       <div class="mrow"><span class="grow small muted">Shared the link by mistake?</span><button class="linkish small" type="button" id="mNewCal">Make a new link</button></div>` : '<p class="small muted">Not available yet.</p>'}</section>
   <section id="mPrefs"><h3>Display &amp; accessibility</h3>${prefsForm('mp')}</section>
-  <section><h3>Teams</h3>${teams.filter(t => t.id !== team.id).map(t => `<div class="mrow"><span class="grow">${esc(t.name)}</span><button class="btn ghost small" type="button" data-switch="${esc(t.id)}">Switch</button></div>`).join('')}
-    <div class="mrow"><button class="btn ghost small" type="button" id="mOther">Join or start another team</button><button class="btn ghost small" type="button" id="mLeave">Leave ${esc(team.name)}</button></div></section>
+  <section><h3>Teams</h3>${teams.filter(t => !team || t.id !== team.id).map(t => `<div class="mrow"><span class="grow">${esc(t.name)}</span><button class="btn ghost small" type="button" data-switch="${esc(t.id)}">Switch</button></div>`).join('')}
+    <div class="mrow"><button class="btn ghost small" type="button" id="mOther">${team ? 'Join or start another team' : 'Join or start a team'}</button>${team ? `<button class="btn ghost small" type="button" id="mLeave">Leave ${esc(team.name)}</button>` : ''}</div></section>
   <section id="mAcct"><h3>Account</h3>
     <form class="mrow" id="mName"><label for="mN" class="grow">Your name<input id="mN" type="text" maxlength="40" value="${esc(myName)}"></label><button class="btn small" type="submit" style="align-self:flex-end">Save</button></form>
     <details><summary class="small">Change password</summary><form id="mPw" style="margin-top:8px">${pwField('mPwI', 'New password <span class="muted small">(8 or more)</span>', 'new-password', 'minlength="8"')}<div class="row"><button class="btn small" type="submit">Save password</button></div></form></details>
@@ -317,7 +321,7 @@ async function teamMenu(session, account, team, teams, myName, section) {
   const reopen = () => teamMenu(session, account, team, teams, myName);
   dlg.querySelector('#mClose').onclick = () => dlg.close();
   dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
-  dlg.querySelector('#mShare').onclick = async e => {
+  if (team) dlg.querySelector('#mShare').onclick = async e => {
     try { if (navigator.share) await navigator.share({ title: `Join ${team.name} on Dugout`, url: link }); else { await navigator.clipboard.writeText(link); e.target.textContent = 'Copied'; } }
     catch (x) { if (x && x.name !== 'AbortError') prompt('Copy this link', link); }
   };
@@ -354,7 +358,7 @@ async function teamMenu(session, account, team, teams, myName, section) {
   };
   dlg.querySelectorAll('[data-switch]').forEach(b => b.onclick = () => { LS.set('team', b.dataset.switch); location.reload(); });
   dlg.querySelector('#mOther').onclick = () => { location.href = location.pathname + '?teams'; };
-  dlg.querySelector('#mLeave').onclick = async () => {
+  if (team) dlg.querySelector('#mLeave').onclick = async () => {
     if (!confirm(`Leave ${team.name}? You’ll need a new invite to come back.`)) return;
     const { error } = await sb.from('team_members').delete().match({ team_id: team.id, user_id: me });
     if (error) return err(friendly(error, 'Couldn’t leave the team.'));

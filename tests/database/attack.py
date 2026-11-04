@@ -264,5 +264,11 @@ sql(f"update docs set data=data||'{{\"hideOnline\":true}}' where col='agents' an
 expect('subs can switch off showing they’re online', True, "select count(*) from public.online_subs()", 'paid2', lambda o: o == '0')
 expect('nobody can mark someone else online', False, f"update accounts set last_seen=now() where user_id='{U['cap']}' returning 1", 'free')
 
+print('\n-- sub levels')
+expect('Elite (level 5) is gone: a new profile can’t use it', False, f"update docs set data=data||'{{\"skill\":5}}' where col='agents' and id='{U['free']}'", 'free')
+sql(f"alter table docs disable trigger user; update docs set data=data||'{{\"skill\":5}}' where col='agents' and id='{U['free']}'; alter table docs enable trigger user;")
+subprocess.run(DB[:-4] + ['-q', '-f', '../../supabase/schema.sql'], capture_output=True, text=True)
+expect('...and old Elite profiles become Competitive (4)', True, f"select data->>'skill' from docs where col='agents' and id='{U['free']}'", None, lambda o: o == '4')
+
 print(f'\n{sum(results)}/{len(results)} passed')
 sys.exit(0 if all(results) else 1)

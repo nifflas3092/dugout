@@ -103,6 +103,15 @@ Only paid captains can import, up to 20 times a day each. The function refuses p
 
 Free players see small house ads (for the captain plan, Gear and removing ads) on Home, Schedule, Team, Diamonds and Gear. Captains and anyone who paid see none. To run real ads later (for example Google AdSense), the slot is `houseAd()` in `js/app.js`; you'd also need to add the ad network to the Content-Security-Policy in `index.html`, `vercel.json` and `netlify.toml`, and ask for consent before personalised ads.
 
+### 3f. Google Maps (Diamonds tab)
+
+The Diamonds tab shows each park on an embedded Google map (satellite view) with one-tap directions. It works as-is, with no key. For Google's official Maps Embed API (free, with no usage limit), add a key:
+
+1. Go to **console.cloud.google.com**, create a project called `dugout`, and enable **Maps Embed API** (APIs & Services → Library). Google asks you to add a billing account to the project, but the Embed API itself is free.
+2. **APIs & Services → Credentials → Create credentials → API key.**
+3. Edit the key: under **Application restrictions** choose **Websites** and add `https://dugout-one-sand.vercel.app/*` (and your own domain later). Under **API restrictions**, allow only **Maps Embed API**.
+4. Paste the key into `GOOGLE_MAPS_KEY` in `config.js` and push. The key is public by design; the website restriction is what stops others using it.
+
 ### 3e. Turn on game forecasts
 
 1. On the **Team** tab, under Team settings, enter your **home area** (a postal code is best).

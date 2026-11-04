@@ -12,3 +12,8 @@ export const MAPBOX_TOKEN = '';
    Players are free. Captains pay monthly to start teams and see the full sub list, and see no ads. Anyone can remove ads with one payment. */
 export const CAPTAIN_PRICE = '$5/month';
 export const ADFREE_PRICE = '$7.99';
+
+/* Google Maps for the Diamonds tab. Works without a key (basic embedded maps). For the official, unlimited and free
+   Maps Embed API, create a key in Google Cloud (README, "Google Maps") and paste it here. It's public by design:
+   lock it to your website's address in Google Cloud so nobody else can use it. */
+export const GOOGLE_MAPS_KEY = '';

@@ -161,19 +161,19 @@ input[type=range] { width: 100%; accent-color: var(--grass); min-height: 32px; }
 
 /* desktop: a side rail instead of the bottom tab bar, wider content, two-column screens */
 @media (min-width: 900px) {
-  nav.tabs { top: 0; bottom: 0; right: auto; width: 208px; border-top: 0; border-right: 1.5px solid var(--line); padding: calc(env(safe-area-inset-top, 0px) + 92px) 12px 16px max(12px, env(safe-area-inset-left, 0px)); }
+  nav.tabs { top: 0; bottom: 0; right: auto; width: 224px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; border-top: 0; border-right: 1.5px solid var(--line); padding: calc(env(safe-area-inset-top, 0px) + 92px) 12px 16px max(12px, env(safe-area-inset-left, 0px)); }
   nav.tabs ul { grid-template-columns: 1fr; gap: 4px; max-width: none; }
   nav.tabs a { display: flex; justify-content: flex-start; gap: 12px; min-height: 48px; padding: 0 14px; border-radius: 10px; font-size: 14px; letter-spacing: .05em; }
   nav.tabs a:hover { background: var(--bg); color: var(--ink); }
   nav.tabs a[aria-current="page"] { background: var(--in-bg); }
-  .wrap { max-width: 1120px; margin-left: 208px; padding-left: max(32px, env(safe-area-inset-left, 0px)); padding-right: max(32px, env(safe-area-inset-right, 0px)); padding-block: 8px 48px; }
+  .wrap { max-width: 1240px; margin-left: 224px; padding-left: max(32px, env(safe-area-inset-left, 0px)); padding-right: max(32px, env(safe-area-inset-right, 0px)); padding-block: 8px 48px; }
   .stack.games { grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); align-items: start; }
   .split { grid-template-columns: 300px 1fr; align-items: start; }
   .filters { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); max-height: calc(100vh - 24px); overflow: auto; }
   .split .results .stack { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); align-items: start; }
-  #toast { bottom: 24px; left: calc(50% + 104px); }
+  #toast { bottom: 24px; left: calc(50% + 112px); }
 }
-@media (min-width: 1500px) { .wrap { margin-left: max(208px, calc((100vw - 1120px) / 2)); } }
+@media (min-width: 1500px) { .wrap { margin-left: max(224px, calc(224px + (100vw - 224px - 1240px) / 2)); } }
 #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--tabh) + 16px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 10px 18px; border-radius: 999px; font-weight: 700; z-index: 30; max-width: calc(100% - 32px); }
 .confirm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
@@ -389,7 +389,7 @@ nav.tabs .tabs-main a[aria-current="page"] svg { background: var(--grass); color
 
 /* desktop: sidebar with the groups spelled out */
 @media (min-width: 900px) {
-  nav.tabs { left: 0; right: auto; bottom: 0; top: 0; border: 0; border-radius: 0; box-shadow: none; padding: calc(env(safe-area-inset-top, 0px) + 92px) 12px 16px; }
+  nav.tabs { left: 0; right: auto; bottom: 0; top: 0; border: 0; border-radius: 0; box-shadow: none; padding: calc(env(safe-area-inset-top, 0px) + 88px) 12px 24px; }
   nav.tabs .tabs-main { display: none; }
   nav.tabs .tabs-side { display: grid; gap: 2px; }
   nav.tabs .side-group { color: rgb(255 255 255 / .62); font-weight: 700; font-size: 13px; padding: 16px 14px 4px; }
@@ -585,3 +585,35 @@ details > summary { cursor: pointer; min-height: 40px; display: flex; align-item
 nav.tabs .tabs-main a.tab-play { color: var(--clay); }
 nav.tabs .tabs-side a.tab-play { color: var(--clay); font-weight: 700; }
 @media (max-width: 380px) { nav.tabs .tabs-main a { font-size: 11px; } nav.tabs .tabs-main a svg { width: 40px; padding: 3px 8px; } }
+/* not on a team yet */
+.start-card .row { align-items: center; }
+.start-ic { width: 48px; height: 48px; border-radius: 14px; background: var(--in-bg); color: var(--grass); display: grid; place-items: center; flex: none; }
+.start-ic .ic { width: 26px; height: 26px; }
+.start-links .btn .ic { margin-right: 4px; }
+.dia-map { margin-top: 4px; }
+.dia-map iframe { width: 100%; aspect-ratio: 16 / 9; min-height: 220px; border: 0; border-radius: 12px; display: block; background: var(--bg); }
+.dia-open { display: inline-block; margin-top: 6px; }
+.dia .btn .ic { margin-right: 4px; }
+
+/* desktop: compact sidebar rows so the whole menu fits more screens (and it scrolls when it doesn't) */
+@media (min-width: 900px) {
+  nav.tabs .tabs-side a { min-height: 40px; }
+  nav.tabs .side-group { padding: 12px 14px 2px; }
+  nav.tabs .tabs-side a.tab-play { white-space: nowrap; }
+  nav.tabs::-webkit-scrollbar { width: 8px; }
+  nav.tabs::-webkit-scrollbar-thumb { background: rgb(255 255 255 / .25); border-radius: 8px; }
+}
+@media (min-width: 900px) and (max-height: 820px) { nav.tabs { padding-top: calc(env(safe-area-inset-top, 0px) + 72px); } nav.tabs .tabs-side a { min-height: 36px; font-size: 14px; } }
+/* wide screens: Home in two columns, the next game beside the to-do list and team news */
+.home-grid { display: block; }
+@media (min-width: 1200px) {
+  .home-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, 1fr); gap: 0 24px; align-items: start; }
+  .home-side > .home-block:first-child { margin-top: 4px; }
+}
+@media (min-width: 900px) { nav.tabs .tabs-side a.tab-play { color: #fde68a; } nav.tabs .tabs-side a.tab-play[aria-current="page"] { color: var(--grass); } }
+/* very large monitors: everything a touch bigger so the app doesn't look tiny */
+@media (min-width: 2200px) { :root { --base: 19px; } }
+.start-card .grow { flex: 1 1 14em; min-width: 0; }
+@media (max-width: 600px) { .start-card .row > .btn { flex: 1 1 100%; } }
+.dia-map iframe { max-height: 380px; }
+.dia-open { color: var(--grass-deep); font-weight: 700; }

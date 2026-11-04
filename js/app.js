@@ -2,7 +2,7 @@
 import { forecast, outlook, CREDIT } from './weather.js';
 import { renderGear, unreadCount, gearBusy } from './market.js';
 import { PLAYS, REACHED, OUTS, POS_NUM, code as playCode, defaultAdvance, applyPlay, defaultRBI, outsOn, pathFor, diamondSVG } from './scorecard.js';
-import { CAPTAIN_PRICE, ADFREE_PRICE } from '../config.js';
+import { CAPTAIN_PRICE, ADFREE_PRICE, GOOGLE_MAPS_KEY } from '../config.js';
 import { icon } from './icons.js';
 import { RULESETS, POS_NAME as RULE_POS_NAME, rulesFor, buildLineupFor, batterAt, lineupPlayers, lineupProblems, availabilityCheck, gameClock } from './rules.js';
 export function startApp(platform) {
@@ -28,6 +28,7 @@ platform.toast = toast;
 const ACCT = platform.account || {};
 const PAID = !!ACCT.captain;              // paid (or grandfathered) captain: full sub list, schedule import, no ads
 const ADFREE = !!ACCT.adFree;
+const NOTEAM = !platform.teamId;          // signed up as a sub (or just browsing): not on a team yet
 const uid = () => Math.random().toString(36).slice(2, 10);
 const pName = id => { const p = st.players.find(x => x.id === id); return p ? p.name : 'Former player'; };
 const pNum = id => { const p = st.players.find(x => x.id === id); return p && p.number !== '' && p.number != null ? '#' + p.number : ''; };
@@ -64,6 +65,7 @@ function render() {
   if (tab === 'subs' && (st.loaded.team || st.offline)) { renderSubs(); subnav(tab); return; }
   if (tab === 'diamonds' && (st.loaded.team || st.offline)) { renderDiamonds(); subnav(tab); houseAd(); return; }
   if (tab === 'gear' && (st.loaded.team || st.offline)) { const r = renderGear(gearCtx()); houseAd(); return r; }
+  if (NOTEAM) { if (tab === 'teams') renderTeams(); else renderNoTeam(tab); subnav(tab); houseAd(); return; }
   if (!st.team && !st.offline) return renderSetup();
   if (st.offline && !st.team) return renderOffline();
   const fn = ({ home: renderHome, gameday: renderGameday, subs: renderSubs, schedule: renderSchedule, lineup: renderLineup, score: renderScore, stats: renderStats, roster: renderRoster, board: renderBoard, chat: renderChat, teams: renderTeams }[tab] || renderHome);
@@ -74,7 +76,7 @@ function render() {
 function header() {
   const t = st.team;
   document.getElementById('teamTitle').textContent = t ? t.name : 'Dugout';
-  document.getElementById('teamSub').textContent = t ? [t.league, t.season].filter(Boolean).join(' · ') || 'Rec league slowpitch' : 'Team app for rec league slowpitch';
+  document.getElementById('teamSub').textContent = t ? [t.league, t.season].filter(Boolean).join(' · ') || 'Rec league slowpitch' : NOTEAM ? 'Not on a team yet' : 'Team app for rec league slowpitch';
   document.getElementById('crest').textContent = t ? (t.name || 'D').trim().slice(0, 2).toUpperCase() : 'D';
   const fin = st.games.filter(g => g.status === 'final');
   const w = fin.filter(g => sum(g.us) > sum(g.them)).length, l = fin.filter(g => sum(g.us) < sum(g.them)).length, tie = fin.length - w - l;
@@ -169,13 +171,13 @@ function renderHome() {
   } else if (!me && st.players.length) todo.push(['Find your name on the roster', 'Tap This is me so you can answer In or Out.', '#schedule', 'Find me']);
   const post = [...st.posts].sort((a, b) => (b.pin ? 1 : 0) - (a.pin ? 1 : 0) || b.at - a.at)[0];
   const unread = myId ? unreadCount(st, myId) : 0;
-  view.innerHTML = `${hero}
-    ${tiles.length ? `<div class="tiles">${tiles.join('')}</div>` : ''}
+  view.innerHTML = `<div class="home-grid"><div class="home-main">${hero}
+    ${tiles.length ? `<div class="tiles">${tiles.join('')}</div>` : ''}</div><div class="home-side">
     ${todo.length ? `<section class="home-block"><h3>${st.canEdit ? 'Before the next game' : 'Get set up'}</h3><ul class="todo">${todo.map(([h, sub, href, cta, attr]) => `<li><span class="grow"><b>${esc(h)}</b><span class="muted small">${esc(sub)}</span></span>${href ? `<a class="btn small" href="${href}" ${attr || ''}>${cta}</a>` : `<button class="btn small" type="button" ${attr || ''}>${cta}</button>`}</li>`).join('')}</ul></section>` : ''}
     <section class="home-block"><h3>From the team</h3>
       ${post ? `<a class="home-post" href="#board"><b>${esc(post.text)}</b><span class="muted small">${post.pin ? 'Pinned' : esc(new Date(post.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }))}</span></a>` : `<a class="home-post" href="#board"><span class="muted">Nothing on the board yet. Post the first note.</span></a>`}
       ${unread ? `<a class="home-post" href="#gear"><b>${unread} new gear message${unread === 1 ? '' : 's'}</b><span class="muted small">Open your inbox</span></a>` : ''}
-    </section>`;
+    </section></div></div>`;
   view.querySelectorAll('.mu-btns [data-rsvp]').forEach(b => b.addEventListener('click', () => setRsvp(b.dataset.g, b.dataset.p, b.dataset.v)));
   view.querySelectorAll('[data-remind]').forEach(b => b.addEventListener('click', () => shareSheet('Remind the team', reminderMessage(st.games.find(x => x.id === b.dataset.remind)))));
   view.querySelectorAll('[data-golu]').forEach(a => a.addEventListener('click', () => { selGame = a.dataset.golu; LS.set('game', selGame); }));
@@ -814,20 +816,32 @@ function renderRoster() {
 
 /* --- Board: announcements and chat --- */
 let names = {};
+// a person's name, straight away where we already know it: their roster spot, or you
+const nameOf = id => names[id] || (id && id === myId && user && user.name && user.name()) || (st.players.find(p => p.uid === id) || {}).name || '';
+const nameLoading = new Set();
+function loadNames(ids) {
+  const want = [...new Set(ids.filter(Boolean))].filter(id => !(id in names) && !nameLoading.has(id));
+  if (!user || !want.length) return;
+  want.forEach(id => nameLoading.add(id));
+  user.profiles(want).then(ps => {
+    want.forEach(id => { names[id] = (ps[id] && ps[id].name) || nameOf(id) || 'Teammate'; nameLoading.delete(id); });
+    // fill the names in where they're already on screen, without redrawing (so typing isn't interrupted)
+    document.querySelectorAll('[data-who]').forEach(el => { if (names[el.dataset.who]) el.textContent = names[el.dataset.who]; });
+  }).catch(() => want.forEach(id => nameLoading.delete(id)));
+}
 async function renderBoard() {
   view.innerHTML = `<h2>Team board</h2>
   ${st.canWrite ? `<form class="panel" id="bf"><label for="bText">Post to the team<textarea id="bText" maxlength="600" placeholder="e.g. Bring the orange balls on Sunday. Diamond 3 moved to 7pm."></textarea></label><div class="row"><button class="btn" type="submit">Post</button></div></form>` : `<p class="muted">You can read the board. Join the team to post.</p>`}
-  <div class="panel" style="margin-top:12px">${st.posts.length ? [...st.posts].sort((a, b) => b.at - a.at).map(p => `<div class="post"><div class="meta">${esc(names[p.u] || 'Teammate')} · ${esc(new Date(p.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}${p.pin ? ' · <b style="color:var(--clay)">Pinned</b>' : ''}</div><p>${esc(p.text)}</p>${st.canEdit ? `<div class="row"><button class="btn ghost small" type="button" data-pin="${esc(p.id)}">${p.pin ? 'Unpin' : 'Pin'}</button><button class="btn danger small" type="button" data-delpost="${esc(p.id)}">Delete</button></div>` : p.u && p.u === myId ? `<div class="row"><button class="btn danger small" type="button" data-delpost="${esc(p.id)}">Delete</button></div>` : ''}</div>`).join('') : '<p class="empty">No posts yet.</p>'}</div>`;
+  <div class="panel" style="margin-top:12px">${st.posts.length ? [...st.posts].sort((a, b) => b.at - a.at).map(p => `<div class="post"><div class="meta"><span data-who="${esc(p.u || '')}">${esc(nameOf(p.u) || 'Teammate')}</span> · ${esc(new Date(p.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}${p.pin ? ' · <b style="color:var(--clay)">Pinned</b>' : ''}</div><p>${esc(p.text)}</p>${st.canEdit ? `<div class="row"><button class="btn ghost small" type="button" data-pin="${esc(p.id)}">${p.pin ? 'Unpin' : 'Pin'}</button><button class="btn danger small" type="button" data-delpost="${esc(p.id)}">Delete</button></div>` : p.u && p.u === myId ? `<div class="row"><button class="btn danger small" type="button" data-delpost="${esc(p.id)}">Delete</button></div>` : ''}</div>`).join('') : '<p class="empty">No posts yet.</p>'}</div>`;
   const f = document.getElementById('bf');
   if (f) f.addEventListener('submit', async e => { e.preventDefault(); const t = document.getElementById('bText').value.trim(); if (!t) return; const u = user ? await user.id() : null; if (await write(() => db.doc('posts/' + uid()).set({ text: t, at: Date.now(), u }), 'Posted')) document.getElementById('bText').value = ''; });
   view.querySelectorAll('[data-delpost]').forEach(b => b.addEventListener('click', () => confirmInline(b, 'Delete post?', () => write(() => db.doc('posts/' + b.dataset.delpost).delete(), 'Post deleted'))));
   view.querySelectorAll('[data-pin]').forEach(b => b.addEventListener('click', () => { const p = st.posts.find(x => x.id === b.dataset.pin); write(() => db.doc('posts/' + p.id).update({ pin: !p.pin })); }));
-  const ids = [...new Set(st.posts.map(p => p.u).filter(Boolean))].filter(id => !(id in names));
-  if (user && ids.length) { try { const ps = await user.profiles(ids); ids.forEach(id => names[id] = (ps[id] && ps[id].name) || 'Teammate'); if ((location.hash || '').slice(1) === 'board') render(); } catch (_) {} }
+  loadNames(st.posts.map(p => p.u));
 }
 
 /* ---------- Subs: a pool of players looking to fill in, searchable by captains ---------- */
-const SKILL = ['', 'Beginner', 'Rec', 'Intermediate', 'Competitive', 'Elite'];
+const SKILL = ['', 'Beginner', 'Rec', 'Intermediate', 'Competitive'];
 const STRENGTHS = ['Power hitter', 'Contact hitter', 'Gap hitter', 'Fast on the bases', 'Strong arm', 'Accurate arm', 'Soft hands', 'Covers ground', 'Pitching', 'Catching', 'Tracks fly balls', 'Shows up on time'];
 const WORKING_ON = ['Hitting for power', 'Speed', 'Arm strength', 'Fly balls', 'Ground balls', 'Pitching', 'Catching', 'Timing the arc', 'New to the game'];
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -868,14 +882,24 @@ function chips(name, list, sel, labelFn = x => x) {
 }
 const checked = (root, name) => [...root.querySelectorAll(`input[data-set="${esc(name)}"]:checked`)].map(x => x.value);
 
+let showAllInv = false;
+// one captain's request: who, when, where, and your answer
+function invCard(i) {
+  const when = i.date ? `${fmtDate(i.date).w} ${fmtDate(i.date).m} ${fmtDate(i.date).d}` : '';
+  return `<div class="panel inv-card" style="padding:12px 16px"><div class="row"><div class="grow"><b>${esc(i.team)}</b> ${i.status === 'pending' ? 'wants you' : 'asked you'} ${when ? `for ${esc(when)}` : ''}${i.time ? ' at ' + esc(fmtTime(i.time)) : ''}${i.field ? ' · ' + esc(i.field) : ''}${i.opp ? ' vs ' + esc(i.opp) : ''}${i.note ? `<div class="muted small">“${esc(i.note)}”</div>` : ''}${i.status !== 'pending' && i.answeredAt ? `<div class="muted small">Answered ${esc(new Date(i.answeredAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }))}</div>` : ''}</div>
+    ${i.status === 'pending' ? `<button class="btn small" type="button" data-inv="${esc(i.id)}" data-s="accepted">I'm in</button><button class="btn ghost small" type="button" data-inv="${esc(i.id)}" data-s="declined">Can't make it</button>` : `<span class="pill ${i.status === 'accepted' ? 'in' : 'out'}">${i.status === 'accepted' ? 'You said yes' : 'You said no'}</span>`}</div></div>`;
+}
 function renderMySub() {
   const box = document.getElementById('subBody');
   if (!myId) { box.innerHTML = `<div class="panel"><p>Sign in to create a sub profile.</p></div>`; return; }
   const a = st.agents.find(x => x.id === myId) || { active: true, pos: [], days: [], times: [], str: [], weak: [], skill: 3, radius: 15 };
   const inv = st.invites.filter(i => i.agent === myId).sort((x, y) => y.at - x.at);
+  const pendingInv = inv.filter(i => i.status === 'pending'), pastInv = inv.filter(i => i.status !== 'pending').sort((x, y) => (y.answeredAt || y.at) - (x.answeredAt || x.at));
   box.innerHTML = `
-  ${inv.length ? `<h3>Requests from captains</h3><div class="stack" style="margin:8px 0 18px">${inv.map(i => `<div class="panel" style="padding:12px 16px"><div class="row"><div class="grow"><b>${esc(i.team)}</b> wants you ${i.date ? `on ${esc(fmtDate(i.date).w)} ${esc(fmtDate(i.date).m)} ${esc(fmtDate(i.date).d)}` : ''}${i.time ? ' at ' + esc(fmtTime(i.time)) : ''}${i.field ? ' · ' + esc(i.field) : ''}${i.opp ? ' vs ' + esc(i.opp) : ''}${i.note ? `<div class="muted small">“${esc(i.note)}”</div>` : ''}</div>
-      ${i.status === 'pending' ? `<button class="btn small" type="button" data-inv="${esc(i.id)}" data-s="accepted">I'm in</button><button class="btn ghost small" type="button" data-inv="${esc(i.id)}" data-s="declined">Can't make it</button>` : `<span class="pill ${i.status === 'accepted' ? 'in' : 'out'}">${i.status === 'accepted' ? 'You said yes' : 'You said no'}</span>`}</div></div>`).join('')}</div>` : ''}
+  ${pendingInv.length ? `<h3>Requests from captains</h3><div class="stack" style="margin:8px 0 18px">${pendingInv.map(i => invCard(i)).join('')}</div>` : ''}
+  ${pastInv.length ? `<h3>Invite history</h3><p class="muted small" style="margin:-4px 0 8px">Every request you’ve answered${pastInv.length > 3 && !showAllInv ? `. Showing the latest 3 of ${pastInv.length}` : ''}.</p>
+    <div class="stack inv-history" style="margin-bottom:18px">${(showAllInv ? pastInv : pastInv.slice(0, 3)).map(i => invCard(i)).join('')}</div>
+    ${pastInv.length > 3 ? `<button class="linkish" type="button" id="invAll" style="margin:-10px 0 14px">${showAllInv ? 'Show only the latest 3' : `Show all ${pastInv.length}`}</button>` : ''}` : ''}
   <form class="panel" id="af">
     <p class="muted small">Captains in this league see this profile when they search for subs. Only fill in what you're happy to share.</p>
     <label class="chk big"><input type="checkbox" id="aActive"${a.active ? ' checked' : ''}> <span><b>I'm available to sub right now</b></span></label>
@@ -903,6 +927,7 @@ function renderMySub() {
     <div class="row"><button class="btn cta" type="submit" id="aSave">${st.agents.some(x => x.id === myId) ? 'Save profile' : 'Join the sub list'}</button>
     ${st.agents.some(x => x.id === myId) ? `<button class="btn danger" type="button" id="aDel">Remove my profile</button>` : ''}</div>
   </form>`;
+  const ia = document.getElementById('invAll'); if (ia) ia.onclick = () => { showAllInv = !showAllInv; renderMySub(); };
   box.querySelectorAll('[data-inv]').forEach(b => b.addEventListener('click', () => write(() => db.doc('invites/' + b.dataset.inv).update({ status: b.dataset.s, answeredAt: Date.now() }), b.dataset.s === 'accepted' ? 'Told the captain you’re in' : 'Told the captain you can’t make it')));
   const form = document.getElementById('af');
   form.addEventListener('submit', async e => {
@@ -1051,10 +1076,33 @@ function confirmInline(btn, q, go) {
 
 /* sample team for trying it out, clearly labeled */
 
+/* ---------- not on a team yet: what a sub (or someone just looking) sees ---------- */
+function renderNoTeam(tab) {
+  const onList = st.agents.some(a => a.id === myId), what = { schedule: 'the schedule', lineup: 'lineups', score: 'the scorecard', roster: 'the roster', chat: 'team chat', stats: 'stats', board: 'the team board', gameday: 'game day' }[tab];
+  view.innerHTML = `<h2>${what ? `Join a team to see ${what}` : `Welcome${user && user.name && user.name() ? ', ' + esc(user.name().split(' ')[0]) : ''}`}</h2>
+  <p class="muted" style="margin-top:-6px">You’re not on a team yet. You don’t need one to sub, trade gear or play.</p>
+  <div class="stack">
+    <article class="panel start-card${onList ? '' : ' upgrade'}"><div class="row"><span class="start-ic">${icon('subs')}</span><div class="grow"><b class="vs" style="font-size:1.2em">${onList ? 'You’re on the sub list' : 'Sign up to sub'}</b>
+      <div class="muted small">${onList ? 'Captains can find you and ask you to play. Keep your days and availability up to date.' : 'Put yourself on the league’s sub list. Captains nearby can ask you to fill in, and you choose yes or no.'}</div></div>
+      <button class="btn${onList ? ' ghost' : ' cta'}" type="button" id="goSub">${onList ? 'My sub profile' : 'Sign up to sub'}</button></div></article>
+    <article class="panel start-card"><div class="row"><span class="start-ic">${icon('pennant')}</span><div class="grow"><b class="vs" style="font-size:1.2em">Join a team</b>
+      <div class="muted small">Got an invite link or a team code from a captain? Use it here.</div></div>
+      <button class="btn ghost" type="button" id="goJoin">Join with a code</button></div></article>
+    <article class="panel start-card"><div class="row"><span class="start-ic">${icon('team')}</span><div class="grow"><b class="vs" style="font-size:1.2em">Start a team</b>
+      <div class="muted small">Captains start teams, invite players, build lineups and see the full sub list${PAID ? '' : ` (${esc(CAPTAIN_PRICE)})`}.</div></div>
+      <button class="btn ghost" type="button" id="goStart">${PAID ? 'Start a team' : 'Become a captain'}</button></div></article>
+    <div class="row start-links"><a class="btn ghost small" href="#gear">${icon('gear')} Gear</a><a class="btn ghost small" href="#diamonds">${icon('pin')} Diamonds</a><a class="btn ghost small" href="game/">${icon('controller')} Slowpitch Showdown</a></div>
+  </div>`;
+  document.getElementById('goSub').onclick = () => { subMode = 'me'; LS.set('submode', 'me'); location.hash = '#subs'; };
+  document.getElementById('goJoin').onclick = () => platform.otherTeams();
+  document.getElementById('goStart').onclick = () => PAID ? platform.otherTeams() : platform.upgrade().catch(() => toast('Couldn’t open checkout. Try again.'));
+}
+
 /* ---------- Profile → Teams: every team you're on, and switching between them ---------- */
 let teamList = null;
 function renderTeams() {
   const cur = platform.team || {}, list = teamList || [cur].filter(t => t.id);
+  if (!list.length) { view.innerHTML = `<h2>Your teams</h2><div class="panel"><p>You’re not on a team yet.</p><div class="row"><button class="btn" type="button" id="joinMore">${icon('pennant')} Join or start a team</button></div></div>`; document.getElementById('joinMore').onclick = () => platform.otherTeams(); if (!teamList && platform.myTeams) platform.myTeams().then(ts => { teamList = ts; if (ts.length && (location.hash || '') === '#teams') render(); }); return; }
   view.innerHTML = `<h2>Your teams</h2>
   <p class="muted small" style="margin-top:-6px">${list.length === 1 ? 'You’re on one team.' : `You’re on ${list.length} teams.`} Switch any time; your RSVPs, chat and stats stay with each team.</p>
   <div class="stack team-cards">${list.map(t => { const here = t.id === cur.id;
@@ -1081,7 +1129,7 @@ function renderChat() {
   <div class="panel chat-panel">
     <div class="chat team-chat" id="tchat" role="log" aria-label="Messages" aria-live="polite">${msgs.length ? msgs.map((m, i) => {
       const mine = m.u && m.u === myId, prev = msgs[i - 1], sameAuthor = prev && prev.u === m.u && (m.at - prev.at) < 5 * 60000;
-      return `<div class="bubble${mine ? ' mine' : ''}">${!mine && !sameAuthor ? `<div class="who small">${esc(names[m.u] || 'Teammate')}</div>` : ''}<div>${esc(m.text)}</div><div class="muted small">${esc(chatTime(m.at))}${mine || st.canEdit ? ` · <button type="button" class="linkish small" data-delchat="${esc(m.id)}" aria-label="Delete this message">Delete</button>` : ''}</div></div>`;
+      return `<div class="bubble${mine ? ' mine' : ''}">${!mine && !sameAuthor ? `<div class="who small" data-who="${esc(m.u || '')}">${esc(nameOf(m.u) || '\u00a0')}</div>` : ''}<div>${esc(m.text)}</div><div class="muted small">${esc(chatTime(m.at))}${mine || st.canEdit ? ` · <button type="button" class="linkish small" data-delchat="${esc(m.id)}" aria-label="Delete this message">Delete</button>` : ''}</div></div>`;
     }).join('') : '<p class="muted small">No messages yet. Say hi to the team.</p>'}</div>
     ${st.canWrite ? `<form class="chat-send" id="cform"><label for="ctxt" class="sr-only">Message</label><textarea id="ctxt" rows="1" maxlength="1000" placeholder="Message the team" enterkeyhint="send" autocomplete="off"></textarea><button class="btn" type="submit">Send</button></form>
     <p class="muted small" style="margin:0">Everyone on the team sees messages here, live. Enter sends; Shift+Enter starts a new line.</p>` : ''}
@@ -1102,8 +1150,7 @@ function renderChat() {
     });
   }
   view.querySelectorAll('[data-delchat]').forEach(b => b.addEventListener('click', () => confirmInline(b, 'Delete message?', () => write(() => db.doc('chat/' + b.dataset.delchat).delete()))));
-  const ids = [...new Set(st.chat.map(m => m.u).filter(Boolean))].filter(id => !(id in names));
-  if (user && ids.length) user.profiles(ids).then(ps => { ids.forEach(id => names[id] = (ps[id] && ps[id].name) || 'Teammate'); if ((location.hash || '') === '#chat' && document.activeElement?.id !== 'ctxt') render(); }).catch(() => {});
+  loadNames(st.chat.map(m => m.u));
 }
 
 /* ---------- ads: hidden for captains and anyone who paid to remove them ---------- */
@@ -1193,8 +1240,13 @@ function importPreview(res, team) {
   });
 }
 
-/* ---------- Diamonds: every ball diamond in town, with directions ---------- */
+/* ---------- Diamonds: every ball diamond in town, on Google Maps, with directions ---------- */
 let diaQ = '';
+const mapsOpen = new Set();               // parks whose map the viewer opened (kept open as data updates)
+// an embedded Google map of the park, as satellite so the diamonds themselves show
+const mapEmbed = (lat, lng, name) => GOOGLE_MAPS_KEY
+  ? `https://www.google.com/maps/embed/v1/place?key=${encodeURIComponent(GOOGLE_MAPS_KEY)}&q=${lat},${lng}&zoom=17&maptype=satellite`
+  : `https://maps.google.com/maps?q=${lat},${lng}&t=k&z=17&output=embed`;
 function renderDiamonds() {
   const home = st.team && st.team.lat != null ? { lat: st.team.lat, lng: st.team.lng } : null;
   const groups = {};
@@ -1204,18 +1256,24 @@ function renderDiamonds() {
   const q = norm(diaQ);
   if (q) parks = parks.filter(p => norm(p.park + ' ' + p.ds.map(d => d.name + ' ' + (d.address || d.label || '')).join(' ')).includes(q));
   parks.sort((a, b) => (!!b.next - !!a.next) || (a.km ?? 1e9) - (b.km ?? 1e9) || a.park.localeCompare(b.park));
+  if (parks.length && !mapsOpen.size) mapsOpen.add(parks[0].park);      // show the first park's map straight away
   const dir = (lat, lng) => `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
-  const map = (lat, lng, name) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name)}%20${lat},${lng}`;
+  const gmap = (lat, lng, name) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name)}%20${lat},${lng}`;
   view.innerHTML = `<h2>Diamonds</h2>
-  <p class="muted small" style="margin-top:-6px">${st.diamonds.length} diamonds at ${Object.keys(groups).length} parks${home ? `, nearest to ${esc(st.team.place || 'your home area')} first` : ''}. Tap for directions in Google Maps.</p>
+  <p class="muted small" style="margin-top:-6px">${st.diamonds.length} diamonds at ${Object.keys(groups).length} parks${home ? `, nearest to ${esc(st.team.place || 'your home area')} first` : ''}. Maps and directions by Google Maps.</p>
   <label for="dq" class="sr-only">Search diamonds</label><input id="dq" type="search" placeholder="Search parks, e.g. Hampton, Mooney’s Bay" value="${esc(diaQ)}" style="width:100%;margin-bottom:12px">
-  <div class="stack">${parks.slice(0, 120).map(p => `<article class="panel dia">
+  <div class="stack">${parks.slice(0, 120).map((p, i) => { const open = mapsOpen.has(p.park);
+    return `<article class="panel dia">
     <div class="row"><div class="grow"><b class="vs" style="font-size:1.15em">${esc(p.park)}</b><div class="muted small">${[p.ds.length > 1 ? `${p.ds.length} diamonds` : '', p.lit ? 'Lights' : '', p.km != null ? `${p.km < 1 ? '<1' : Math.round(p.km)} km` : '', esc(p.ds[0].address || p.ds[0].label || '')].filter(Boolean).join(' · ')}</div>
       ${p.next ? `<div class="small"><span class="pill in">Next game here</span> ${esc(gameWhen(p.next))} vs ${esc(p.next.opp)}</div>` : ''}</div>
-      <a class="btn small" href="${esc(dir(p.lat, p.lng))}" target="_blank" rel="noopener">Directions</a><a class="btn ghost small" href="${esc(map(p.lat, p.lng, p.park))}" target="_blank" rel="noopener">Map</a></div>
+      <a class="btn small" href="${esc(dir(p.lat, p.lng))}" target="_blank" rel="noopener">${icon('pin')} Directions</a>
+      <button class="btn ghost small" type="button" data-map="${i}" aria-expanded="${open}">${open ? 'Hide map' : 'Show map'}</button></div>
+    ${open ? `<div class="dia-map"><iframe title="Map of ${esc(p.park)}" src="${esc(mapEmbed(p.lat, p.lng, p.park))}" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+      <a class="small dia-open" href="${esc(gmap(p.lat, p.lng, p.park))}" target="_blank" rel="noopener">Open in Google Maps</a></div>` : ''}
     ${p.ds.length > 1 ? `<details><summary class="small">Each diamond</summary><ul class="dia-list">${p.ds.map(d => `<li><span class="grow">${esc(d.name)}${d.lit ? ' <span class="muted small">· lights</span>' : ''}</span><a class="linkish small" href="${esc(dir(d.lat, d.lng))}" target="_blank" rel="noopener">Directions</a></li>`).join('')}</ul></details>` : ''}
-  </article>`).join('') || `<div class="panel empty">${q ? 'No parks match that search.' : 'No diamonds yet. Captains can add one from Find a sub, or import a schedule.'}</div>`}</div>
+  </article>`; }).join('') || `<div class="panel empty">${q ? 'No parks match that search.' : 'No diamonds yet. Captains can add one from Find a sub, or import a schedule.'}</div>`}</div>
   ${st.diamonds.some(d => d.src === 'osm') ? '<p class="muted small" style="margin-top:12px">Diamond locations © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors.</p>' : ''}`;
+  view.querySelectorAll('[data-map]').forEach(b => b.onclick = () => { const p = parks[+b.dataset.map]; if (mapsOpen.has(p.park)) mapsOpen.delete(p.park); else mapsOpen.add(p.park); renderDiamonds(); subnav('diamonds'); });
   const inp = document.getElementById('dq');
   inp.addEventListener('input', () => { diaQ = inp.value; clearTimeout(inp.t); inp.t = setTimeout(() => { const pos = inp.selectionStart; render(); const n = document.getElementById('dq'); n.focus(); n.setSelectionRange(pos, pos); }, 250); });
 }
@@ -1259,7 +1317,7 @@ render();
   db.collection('invites').onSnapshot(s => { st.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); db.collection('contacts').refresh().catch(() => {}); soon(); }, fail);
   db.collection('contacts').onSnapshot(s => { st.contacts = {}; s.docs.forEach(d => st.contacts[d.id] = d.data().contact); soon(); }, fail);
   db.collection('posts').onSnapshot(s => { st.posts = s.docs.map(d => ({ id: d.id, ...d.data() })); soon(); }, fail);
-  db.collection('chat').onSnapshot(s => { st.chat = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.at || 0) - (b.at || 0)); if ((location.hash || '') === '#chat') markChatRead(); soon(); }, fail);
+  db.collection('chat').onSnapshot(s => { st.chat = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.at || 0) - (b.at || 0)); loadNames(st.chat.map(m => m.u)); if ((location.hash || '') === '#chat') markChatRead(); soon(); }, fail);
   // "online now": check in while the app is on screen; captains see who else is
   const beat = () => { if (document.visibilityState === 'visible') platform.heartbeat && platform.heartbeat(); };
   const poll = async () => { if (!PAID || !platform.onlineSubs || document.visibilityState !== 'visible') return; try { const ids = await platform.onlineSubs(); const n = new Set(ids); if ([...n].join() !== [...st.online].join()) { st.online = n; soon(); } } catch (_) {} };

@@ -102,6 +102,10 @@ insert into public.docs (scope, col, id, data, owner)
   select 'global', 'contacts', id, jsonb_build_object('contact', data->>'contact'), owner from public.docs
   where scope = 'global' and col = 'agents' and coalesce(data->>'contact', '') <> '' on conflict do nothing;
 update public.docs set data = data - 'contact' where scope = 'global' and col = 'agents' and data ? 'contact';
+-- the top level was Elite (5) until Nov 2026; those players are now Competitive (4)
+alter table public.docs disable trigger user;
+update public.docs set data = jsonb_set(data, '{skill}', '4') where scope = 'global' and col = 'agents' and data->>'skill' = '5';
+alter table public.docs enable trigger user;
 
 create index if not exists docs_scope_col on public.docs (scope, col);
 create index if not exists docs_owner_created on public.docs (owner, created_at);
@@ -354,7 +358,7 @@ begin
     -- everyone signed in sees the sub list, so accept only the shapes the app produces
     if coalesce(new.data->>'gender', '') not in ('', 'w', 'm', 'x')
        or coalesce(new.data->>'bats', 'R') not in ('R', 'L', 'S') or coalesce(new.data->>'throws', 'R') not in ('R', 'L')
-       or coalesce(new.data->>'skill', '1') !~ '^[1-5]$' or coalesce(new.data->>'radius', '15') !~ '^[0-9]{1,3}$'
+       or coalesce(new.data->>'skill', '1') !~ '^[1-4]$' or coalesce(new.data->>'radius', '15') !~ '^[0-9]{1,3}$'
        or char_length(coalesce(new.data->>'area', '')) > 80
        or jsonb_typeof(coalesce(new.data->'active', 'true')) <> 'boolean' or jsonb_typeof(coalesce(new.data->'hideOnline', 'false')) <> 'boolean'
        or jsonb_typeof(coalesce(new.data->'pos', '[]')) <> 'array' or jsonb_typeof(coalesce(new.data->'days', '[]')) <> 'array'
