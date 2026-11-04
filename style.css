@@ -1,17 +1,19 @@
 /* Layout: a phone-first team app; one column of content, a fixed tab bar at the bottom like a dugout lineup card. */
 :root {
   /* Fresh Field & Turf: off-white base (60%), clover green (30%), ochre gold accent (10%), graphite text */
-  --bg: #f8fafc;          /* pure off-white: the page */
+  --bg: #f8f7f4;          /* warm white: the page */
   --surface: #ffffff;     /* cards sit a touch brighter than the page */
-  --ink: #0f172a;         /* deep forest graphite: text and icons */
+  --ink: #111827;         /* ink: text and icons */
   --muted: #475569;
   --line: #e2e8f0;
-  --grass: #3b8256;       /* soft meadow / clover green: header, active tabs, scorecards */
+  --grass: #1e2a44;       /* deep navy: header, sidebar, active tabs, scorecards */
   --grass-ink: #ffffff;
-  --grass-deep: #2f6b46;  /* pressed and hover states */
-  --gold: #f59e0b;        /* warm ochre: standout buttons, badges, warnings */
-  --gold-ink: #0f172a;    /* text on gold */
-  --clay: #b45309;        /* gold when it has to be readable as text on white */
+  --grass-deep: #141d31;  /* pressed and hover states */
+  --gold: #d7263d;        /* ballpark red: standout buttons, badges */
+  --rule: #e3b23c;        /* gold, sparingly: rules and trims */
+  --tint: #e8edf6;        /* light navy wash: selected things */
+  --gold-ink: #ffffff;    /* text on red */
+  --clay: #b91c32;        /* red when it has to be readable as text on white */
   --in: #2f6b46; --in-bg: #e8f3ec;
   --maybe: #92400e; --maybe-bg: #fef3c7;
   --out: #b91c1c; --out-bg: #fee2e2;
@@ -23,13 +25,13 @@
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
   --bg: #0b1220; --surface: #131c2e; --ink: #f1f5f9; --muted: #94a3b8; --line: #26324a;
-  --grass: #3b8256; --grass-ink: #ffffff; --grass-deep: #2f6b46; --gold: #fbbf24; --gold-ink: #0f172a; --clay: #fbbf24;
-  --in: #7dd3a0; --in-bg: #163024; --maybe: #fcd34d; --maybe-bg: #3a2a08; --out: #fca5a5; --out-bg: #3b1414; --focus: #93c5fd;
+  --grass: #23314f; --grass-ink: #ffffff; --grass-deep: #18233b; --gold: #e2475a; --gold-ink: #ffffff; --clay: #ff8a96; --rule: #e3b23c; --tint: #1c2840;
+  --in: #a9c1ff; --in-bg: #163024; --maybe: #fcd34d; --maybe-bg: #3a2a08; --out: #fca5a5; --out-bg: #3b1414; --focus: #93c5fd;
   color-scheme: dark } }
 :root[data-theme="dark"] {
   --bg: #0b1220; --surface: #131c2e; --ink: #f1f5f9; --muted: #94a3b8; --line: #26324a;
-  --grass: #3b8256; --grass-ink: #ffffff; --grass-deep: #2f6b46; --gold: #fbbf24; --gold-ink: #0f172a; --clay: #fbbf24;
-  --in: #7dd3a0; --in-bg: #163024; --maybe: #fcd34d; --maybe-bg: #3a2a08; --out: #fca5a5; --out-bg: #3b1414; --focus: #93c5fd;
+  --grass: #23314f; --grass-ink: #ffffff; --grass-deep: #18233b; --gold: #e2475a; --gold-ink: #ffffff; --clay: #ff8a96; --rule: #e3b23c; --tint: #1c2840;
+  --in: #a9c1ff; --in-bg: #163024; --maybe: #fcd34d; --maybe-bg: #3a2a08; --out: #fca5a5; --out-bg: #3b1414; --focus: #93c5fd;
   color-scheme: dark }
 html.big { --base: 20px; }
 html, body { background: var(--bg); color: var(--ink); }
@@ -258,7 +260,7 @@ header.top .chip-btn[aria-pressed="true"] { background: #fff; color: var(--grass
 header.top :focus-visible { outline-color: var(--gold); }
 /* phone tab bar: white, with the active tab in green and a green marker */
 nav.tabs a[aria-current="page"] { color: var(--grass); box-shadow: inset 0 3px 0 var(--grass); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) nav.tabs a[aria-current="page"] { color: #7dd3a0; box-shadow: inset 0 3px 0 #7dd3a0; } }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) nav.tabs a[aria-current="page"] { color: #a9c1ff; box-shadow: inset 0 3px 0 #a9c1ff; } }
 /* desktop: the sidebar carries the green */
 @media (min-width: 900px) {
   nav.tabs { background: var(--grass); border-right: 0; }
@@ -276,12 +278,12 @@ nav.tabs a[aria-current="page"] { color: var(--grass); box-shadow: inset 0 3px 0
 .btn.ghost:hover:not(:disabled) { background: var(--bg); border-color: var(--grass); }
 .btn.danger:hover:not(:disabled) { background: var(--out-bg); }
 .btn.cta { background: var(--gold); color: var(--gold-ink); }
-.btn.cta:hover:not(:disabled) { background: #d97706; }
+.btn.cta:hover:not(:disabled) { background: #b91c32; }
 .badge { background: var(--gold); color: var(--gold-ink); }
 .datebox .m { color: var(--grass); }
 .gear-price { color: var(--grass); }
-:root[data-theme="dark"] .gear-price, :root[data-theme="dark"] .datebox .m { color: #7dd3a0; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .gear-price, :root:not([data-theme="light"]) .datebox .m { color: #7dd3a0; } }
+:root[data-theme="dark"] .gear-price, :root[data-theme="dark"] .datebox .m { color: #a9c1ff; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .gear-price, :root:not([data-theme="light"]) .datebox .m { color: #a9c1ff; } }
 
 /* ---------- scoring extras and team messages ---------- */
 .outs { display: inline-flex; gap: 4px; vertical-align: middle; }
@@ -334,7 +336,7 @@ a.btn { display: inline-flex; align-items: center; justify-content: center; text
    Look v2: chunky and friendly (pressable buttons, thick-edged cards),
    one bold moment (the matchup card with softball seams), everything else calm.
    ===================================================================== */
-:root { --r-card: 20px; --r-btn: 14px; --edge: 2px; --tabh: 76px; --gold-deep: #c27803; --line-deep: #cbd5e1; }
+:root { --r-card: 20px; --r-btn: 14px; --edge: 2px; --tabh: 76px; --gold-deep: #a91c2f; --line-deep: #cbd5e1; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --line-deep: #334155; --gold-deep: #b45309; } }
 :root[data-theme="dark"] { --line-deep: #334155; --gold-deep: #b45309; }
 
@@ -455,7 +457,7 @@ th { font-size: .82em; }
 /* ---------- scorecard ---------- */
 .live { display: flex; align-items: center; gap: 16px; }
 .live-dia { width: 110px; flex: none; }
-.ld-in { fill: #e8f3ec; stroke: var(--grass); stroke-width: 2; }
+.ld-in { fill: #e8edf6; stroke: var(--grass); stroke-width: 2; }
 .ld-base { fill: var(--surface); stroke: var(--line-deep); stroke-width: 2; }
 .ld-base.on { fill: var(--gold); stroke: var(--gold-deep); }
 .ld-home { fill: var(--surface); stroke: var(--line-deep); stroke-width: 2; }
@@ -511,8 +513,8 @@ html.hc :focus-visible { outline-width: 4px; }
 @media (prefers-color-scheme: dark) { html.hc:not([data-theme="light"]) { --muted: #e2e8f0; --line: #94a3b8; } }
 html.hc[data-theme="dark"] { --muted: #e2e8f0; --line: #94a3b8; }
 .linkish { background: none; border: 0; padding: 6px 2px; min-height: 40px; color: var(--grass-deep); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .linkish { color: #7dd3a0; } }
-:root[data-theme="dark"] .linkish { color: #7dd3a0; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .linkish { color: #a9c1ff; } }
+:root[data-theme="dark"] .linkish { color: #a9c1ff; }
 .gate footer .linkish { color: inherit; font-weight: 400; padding: 0; min-height: 0; }
 .auth-tabs { display: flex; width: 100%; margin-bottom: 14px; }
 .auth-tabs button { flex: 1; min-height: 48px; }
@@ -547,8 +549,8 @@ details > summary { cursor: pointer; min-height: 40px; display: flex; align-item
 .chat-panel { gap: 10px; }
 .team-chat { min-height: 40vh; max-height: calc(100dvh - 330px); }
 .team-chat .who { font-weight: 700; color: var(--grass-deep); margin-bottom: 2px; font-size: .78em; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .team-chat .who { color: #7dd3a0; } }
-:root[data-theme="dark"] .team-chat .who { color: #7dd3a0; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .team-chat .who { color: #a9c1ff; } }
+:root[data-theme="dark"] .team-chat .who { color: #a9c1ff; }
 .team-chat .linkish { min-height: 0; padding: 0; font-weight: 400; }
 .chat-send { display: flex; gap: 8px; align-items: flex-end; }
 .chat-send textarea { flex: 1; resize: none; min-height: 48px; max-height: 160px; }
@@ -650,8 +652,8 @@ h2 { letter-spacing: -0.015em; }
 .muted { color: var(--muted); }
 @media (min-width: 900px) { nav.tabs { border-radius: 0; } }
 :where(a:not(.btn)) { color: var(--grass-deep); text-underline-offset: 2px; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) :where(a:not(.btn)) { color: #7dd3a0; } }
-:root[data-theme="dark"] :where(a:not(.btn)) { color: #7dd3a0; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) :where(a:not(.btn)) { color: #a9c1ff; } }
+:root[data-theme="dark"] :where(a:not(.btn)) { color: #a9c1ff; }
 @media (min-width: 900px) { .wrap { padding-top: 0; } }
 
 /* ---------- borders: framed banners, boxed labels, outlined sections ---------- */
@@ -694,3 +696,31 @@ dialog.menu .mhead { border-bottom: 2px solid var(--gold); }
 header.top { position: relative; box-shadow: 0 0 0 100vmax var(--grass); clip-path: inset(0 -100vmax); margin-bottom: 17px; }
 header.top::after { content: ""; position: absolute; left: -100vmax; right: -100vmax; bottom: 0; height: 3px; background: var(--gold); pointer-events: none; }
 .agent .row > .grow { min-width: 12em; }
+
+/* ---------- navy & red: gold only for trims; green stays only for "In" ---------- */
+header.top::after, .matchup { --x: 0; }
+header.top::after { background: var(--rule); }
+header.top .crest { box-shadow: 0 0 0 2px var(--rule); }
+header.top .record { color: var(--rule); }
+header.top :focus-visible, nav.tabs :focus-visible { outline-color: var(--rule); }
+@media (min-width: 900px) { nav.tabs { border-right-color: var(--rule); } nav.tabs .tabs-side a.tab-play { color: var(--rule); } }
+.matchup { border-top-color: var(--rule); box-shadow: 0 10px 28px rgb(30 42 68 / .28); }
+.mu-when { background: var(--rule); color: #111827; }
+.mu-facts a { color: var(--rule); }
+.mu-btn { color: var(--grass); }
+.mu-slots i.on.w { background: var(--rule); }
+dialog.menu .mhead { border-bottom-color: var(--rule); }
+.notice, .upgrade { border-left-color: var(--rule); }
+.upgrade { border-color: var(--rule); }
+.play-sheet { border-color: var(--rule); }
+.sc-cur { box-shadow: inset 0 0 0 3px var(--rule); }
+.ld-base.on { fill: var(--rule); stroke: #b8891c; }
+.notice-warn { background: #f59e0b; color: #111827; }
+.seg button[aria-pressed="true"][data-v="maybe"] { background: #fbbf24; color: #111827; }
+/* selected things get a navy wash, not green */
+.opt:has(input:checked) { border-color: var(--grass); background: var(--tint); }
+.start-ic { background: var(--tint); color: var(--grass); }
+@media (min-width: 900px) { nav.tabs a[aria-current="page"] { background: #fff; color: var(--grass); } }
+.opt input, input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(--grass); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .opt input, :root:not([data-theme="light"]) input[type=checkbox], :root:not([data-theme="light"]) input[type=radio] { accent-color: #a9c1ff; } }
+.team-chat .who { color: var(--grass); }

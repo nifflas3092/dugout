@@ -248,7 +248,7 @@ async function lineupImage(g) {
   const x = cv.getContext('2d'), disp = '"Plus Jakarta Sans", "Inter", Arial, sans-serif', body = '"Inter", Arial, sans-serif';
   try { await document.fonts.ready; } catch (_) {}
   x.fillStyle = '#f8fafc'; x.fillRect(0, 0, W, H);
-  x.fillStyle = '#3b8256'; x.fillRect(0, 0, W, 190);
+  x.fillStyle = '#1e2a44'; x.fillRect(0, 0, W, 190);
   x.fillStyle = '#ffffff'; x.font = `700 56px ${disp}`; x.fillText((st.team?.name || 'Lineup').toUpperCase().slice(0, 28), 48, 92);
   x.font = `400 30px ${body}`; x.fillText(`${gameWhen(g)} · ${g.home ? 'vs' : '@'} ${g.opp}${g.field ? ' · ' + g.field : ''}`.slice(0, 70), 48, 146);
   const nameW = 330, colW = Math.min(76, (W - 48 - 70 - nameW - 48) / inn), x0 = 48 + 70 + nameW;
@@ -258,11 +258,11 @@ async function lineupImage(g) {
   people.forEach((p, i) => {
     const y = top + i * rowH, spot = L.order.indexOf(p);
     x.fillStyle = i % 2 ? '#f8fafc' : '#ffffff'; x.fillRect(32, y, W - 64, rowH);
-    x.fillStyle = '#3b8256'; x.font = `700 32px ${disp}`; x.fillText(spot >= 0 ? String(spot + 1) : '↻', 52, y + 44);
+    x.fillStyle = '#1e2a44'; x.font = `700 32px ${disp}`; x.fillText(spot >= 0 ? String(spot + 1) : '↻', 52, y + 44);
     x.fillStyle = '#0f172a'; x.font = `700 30px ${body}`; x.fillText(pName(p).slice(0, 20), 118, y + 43);
     for (let k = 0; k < inn; k++) {
       const pos = posAt(L, k, p), cx = x0 + colW * k + colW / 2;
-      x.fillStyle = pos === 'BN' ? '#e2e8f0' : pos === 'P' ? '#f59e0b' : '#e8f3ec'; x.beginPath(); x.roundRect(cx - colW / 2 + 5, y + 12, colW - 10, rowH - 24, 8); x.fill();
+      x.fillStyle = pos === 'BN' ? '#e2e8f0' : pos === 'P' ? '#fbd5da' : '#e8edf6'; x.beginPath(); x.roundRect(cx - colW / 2 + 5, y + 12, colW - 10, rowH - 24, 8); x.fill();
       x.fillStyle = pos === 'BN' ? '#64748b' : '#0f172a'; x.font = `700 24px ${body}`; x.textAlign = 'center'; x.fillText(pos, cx, y + 42); x.textAlign = 'left';
     }
   });

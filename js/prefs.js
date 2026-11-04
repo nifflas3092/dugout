@@ -13,7 +13,7 @@ export function applyPrefs(p = getPrefs()) {
   h.classList.toggle('hc', !!p.contrast);
   h.classList.toggle('calm', !!p.motion);
   h.classList.toggle('links-u', !!p.underline);
-  const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.content = '#3b8256';
+  const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.content = '#1e2a44';
 }
 
 /* the settings form, used on the sign-in screen and in the menu */
