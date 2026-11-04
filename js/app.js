@@ -245,11 +245,11 @@ function lineupText(g) {
 async function lineupImage(g) {
   const L = g.lineup, people = lineupPlayers(L), n = people.length, inn = L.field.length;
   const W = 1080, rowH = 66, top = 250, H = top + n * rowH + 110, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
-  const x = cv.getContext('2d'), disp = '"Barlow Condensed", "Arial Narrow", Arial, sans-serif', body = '"Atkinson Hyperlegible", Arial, sans-serif';
+  const x = cv.getContext('2d'), disp = '"Plus Jakarta Sans", "Inter", Arial, sans-serif', body = '"Inter", Arial, sans-serif';
   try { await document.fonts.ready; } catch (_) {}
   x.fillStyle = '#f8fafc'; x.fillRect(0, 0, W, H);
   x.fillStyle = '#3b8256'; x.fillRect(0, 0, W, 190);
-  x.fillStyle = '#ffffff'; x.font = `800 64px ${disp}`; x.fillText((st.team?.name || 'Lineup').toUpperCase().slice(0, 28), 48, 92);
+  x.fillStyle = '#ffffff'; x.font = `700 56px ${disp}`; x.fillText((st.team?.name || 'Lineup').toUpperCase().slice(0, 28), 48, 92);
   x.font = `400 30px ${body}`; x.fillText(`${gameWhen(g)} · ${g.home ? 'vs' : '@'} ${g.opp}${g.field ? ' · ' + g.field : ''}`.slice(0, 70), 48, 146);
   const nameW = 330, colW = Math.min(76, (W - 48 - 70 - nameW - 48) / inn), x0 = 48 + 70 + nameW;
   x.fillStyle = '#475569'; x.font = `700 22px ${body}`;
@@ -258,7 +258,7 @@ async function lineupImage(g) {
   people.forEach((p, i) => {
     const y = top + i * rowH, spot = L.order.indexOf(p);
     x.fillStyle = i % 2 ? '#f8fafc' : '#ffffff'; x.fillRect(32, y, W - 64, rowH);
-    x.fillStyle = '#3b8256'; x.font = `800 34px ${disp}`; x.fillText(spot >= 0 ? String(spot + 1) : '↻', 52, y + 44);
+    x.fillStyle = '#3b8256'; x.font = `700 32px ${disp}`; x.fillText(spot >= 0 ? String(spot + 1) : '↻', 52, y + 44);
     x.fillStyle = '#0f172a'; x.font = `700 30px ${body}`; x.fillText(pName(p).slice(0, 20), 118, y + 43);
     for (let k = 0; k < inn; k++) {
       const pos = posAt(L, k, p), cx = x0 + colW * k + colW / 2;
