@@ -62,6 +62,20 @@ create table if not exists public.app_flags (key text primary key, at timestampt
 create table if not exists public.import_log (user_id uuid not null references auth.users on delete cascade, at timestamptz not null default now());
 create index if not exists import_log_user_at on public.import_log (user_id, at);
 
+-- marketplace moderation: who runs Dugout, who is banned from Gear, and a record of every admin action
+create table if not exists public.admins (user_id uuid primary key references auth.users on delete cascade, added_at timestamptz not null default now());
+create table if not exists public.market_bans (
+  user_id uuid primary key references auth.users on delete cascade,
+  reason text not null default '' check (char_length(reason) <= 300),
+  by uuid references auth.users on delete set null,
+  at timestamptz not null default now(),
+  until timestamptz);                                  -- null: until lifted
+create table if not exists public.admin_log (
+  id bigint generated always as identity primary key,
+  admin uuid references auth.users on delete set null,
+  action text not null, target text not null default '', note text not null default '' check (char_length(note) <= 300),
+  at timestamptz not null default now());
+
 -- all app data. scope = a team id, or 'global' for the league-wide sub list
 create table if not exists public.docs (
   scope text not null,
@@ -120,10 +134,14 @@ alter table public.docs enable row level security;
 alter table public.accounts enable row level security;
 alter table public.app_flags enable row level security;
 alter table public.import_log enable row level security;
+alter table public.admins enable row level security;
+alter table public.market_bans enable row level security;
+alter table public.admin_log enable row level security;
 
 -- signed-out visitors get nothing; signed-in users get only what the policies below allow
 -- (Supabase grants every new table to anon and authenticated by default, so take it all back first, then grant only what's needed)
-revoke all on public.profiles, public.teams, public.team_members, public.join_attempts, public.docs, public.accounts, public.app_flags, public.import_log from anon, authenticated, public;
+revoke all on public.profiles, public.teams, public.team_members, public.join_attempts, public.docs, public.accounts, public.app_flags, public.import_log,
+  public.admins, public.market_bans, public.admin_log from anon, authenticated, public;  -- the moderation tables: functions only
 grant select on public.accounts to authenticated;
 grant select, insert, delete on public.docs to authenticated;
 grant update (scope, col, id, data) on public.docs to authenticated;  -- the key columns are needed for upserts; a trigger stops them changing
@@ -155,6 +173,14 @@ create or replace function public.is_paid_captain() returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (select 1 from public.accounts a where a.user_id = (select auth.uid())
                  and (a.grandfathered or (a.captain_status in ('active', 'trialing') and (a.captain_until is null or a.captain_until > now() - interval '3 days'))));
+$$;
+create or replace function public.is_admin() returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.admins a where a.user_id = (select auth.uid()));
+$$;
+create or replace function public.is_market_banned() returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.market_bans b where b.user_id = (select auth.uid()) and (b.until is null or b.until > now()));
 $$;
 create or replace function public.shares_team(other uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
@@ -191,14 +217,14 @@ $$;
 ---------------------------------------------------------------------------
 do $$ declare r record; begin
   for r in select policyname, tablename from pg_policies where schemaname = 'public'
-           and tablename in ('profiles', 'teams', 'team_members', 'join_attempts', 'docs', 'accounts', 'app_flags', 'import_log') loop
+           and tablename in ('profiles', 'teams', 'team_members', 'join_attempts', 'docs', 'accounts', 'app_flags', 'import_log', 'admins', 'market_bans', 'admin_log') loop
     execute format('drop policy %I on public.%I', r.policyname, r.tablename);
   end loop;
 end $$;
 
 -- profiles: you, and people on a team with you
 create policy profiles_read on public.profiles for select to authenticated
-  using (id = (select auth.uid()) or public.shares_team(id));
+  using (id = (select auth.uid()) or public.shares_team(id) or public.is_admin());
 create policy profiles_edit_own on public.profiles for update to authenticated
   using (id = (select auth.uid())) with check (id = (select auth.uid()));
 
@@ -251,7 +277,10 @@ create policy docs_post_delete_own on public.docs for delete to authenticated
 
 -- docs: the gear marketplace. Listings are public to signed-in users; conversations only to the two people in them.
 create policy docs_read_listings on public.docs for select to authenticated
-  using (scope = 'global' and col = 'listings');
+  using (scope = 'global' and col = 'listings'
+         and (coalesce(data->>'status', 'active') <> 'removed' or owner = (select auth.uid()) or public.is_admin()));  -- removed listings: only the seller and admins
+create policy docs_admin_read_reports on public.docs for select to authenticated
+  using (scope = 'global' and col = 'reports' and public.is_admin());
 create policy docs_listing_insert on public.docs for insert to authenticated
   with check (scope = 'global' and col = 'listings');
 create policy docs_listing_update on public.docs for update to authenticated
@@ -386,6 +415,12 @@ begin
     if jsonb_typeof(new.data->'lat') <> 'number' or jsonb_typeof(new.data->'lng') <> 'number' then raise exception 'Diamond needs a location'; end if;
 
   elsif new.col = 'listings' then
+    if public.is_market_banned() then raise exception 'Your Gear access is suspended. Contact Dugout if you think this is a mistake.'; end if;
+    -- only an admin can remove a listing, and only an admin can bring a removed one back
+    if coalesce(current_setting('dugout.admin', true), '') <> 'on' then
+      if tg_op = 'UPDATE' and old.data->>'status' = 'removed' then raise exception 'Dugout removed this listing. Contact Dugout if you think this is a mistake.'; end if;
+      if new.data->>'status' = 'removed' then raise exception 'Some of the listing details aren''t valid'; end if;
+    end if;
     if tg_op = 'INSERT' then
       select count(*) into recent from public.docs where owner = me and col = 'listings' and created_at > now() - interval '1 day';
       if recent >= 15 then raise exception 'That''s a lot of listings for one day. Try again tomorrow.'; end if;
@@ -394,7 +429,7 @@ begin
     if char_length(coalesce(new.data->>'desc', '')) > 1000 then raise exception 'Description is up to 1000 characters'; end if;
     if coalesce(new.data->>'cat', '') not in ('bat', 'glove', 'cleats', 'helmet', 'bag', 'balls', 'catcher', 'apparel', 'training', 'other')
        or coalesce(new.data->>'cond', '') not in ('new', 'likenew', 'good', 'fair', 'worn')
-       or coalesce(new.data->>'status', 'active') not in ('active', 'pending', 'sold')
+       or coalesce(new.data->>'status', 'active') not in ('active', 'pending', 'sold', 'removed')
        or coalesce(new.data->>'cert', '') not in ('', 'usa', 'usssa', 'isf', 'nsa', 'multi', 'none')
        or coalesce(new.data->>'price', '') !~ '^[0-9]{1,4}$'
        or char_length(coalesce(new.data->>'size', '')) > 30 or char_length(coalesce(new.data->>'brand', '')) > 30
@@ -413,6 +448,7 @@ begin
     new.data := new.data || jsonb_build_object('seller', coalesce(new.owner, me)::text);
 
   elsif new.col = 'threads' then
+    if tg_op = 'INSERT' and public.is_market_banned() then raise exception 'Your Gear access is suspended. Contact Dugout if you think this is a mistake.'; end if;
     if tg_op = 'INSERT' then
       select count(*) into recent from public.docs where owner = me and col = 'threads' and created_at > now() - interval '1 hour';
       if recent >= 20 then raise exception 'You''ve messaged a lot of sellers this hour. Try again later.'; end if;
@@ -431,6 +467,7 @@ begin
 
   elsif new.col = 'messages' then
     if tg_op = 'UPDATE' then raise exception 'Messages can''t be edited'; end if;
+    if public.is_market_banned() then raise exception 'Your Gear access is suspended. Contact Dugout if you think this is a mistake.'; end if;
     select count(*) into recent from public.docs where owner = me and col = 'messages' and created_at > now() - interval '10 minutes';
     if recent >= 60 then raise exception 'Slow down a little. Try again in a few minutes.'; end if;
     if char_length(coalesce(new.data->>'text', '')) not between 1 and 1000 then raise exception 'Messages are 1 to 1000 characters'; end if;
@@ -445,12 +482,15 @@ begin
     new.data := jsonb_build_object('text', new.data->>'text', 'u', me::text, 'at', (extract(epoch from now()) * 1000)::bigint);
 
   elsif new.col = 'reports' then
-    if tg_op = 'UPDATE' then raise exception 'Reports can''t be edited'; end if;
+    if tg_op = 'UPDATE' then
+      if coalesce(current_setting('dugout.admin', true), '') <> 'on' then raise exception 'Reports can''t be edited'; end if;
+      return new;                                       -- an admin closing the report (admin_resolve_report)
+    end if;
     select count(*) into recent from public.docs where owner = me and col = 'reports' and created_at > now() - interval '1 day';
     if recent >= 10 then raise exception 'Thanks, we have your reports. Try again tomorrow.'; end if;
     if coalesce(new.data->>'reason', '') not in ('scam', 'prohibited', 'offensive', 'wrong', 'other') then raise exception 'Pick a reason'; end if;
     new.data := jsonb_build_object('listing', left(new.data->>'listing', 80), 'reason', new.data->>'reason',
-                                   'note', left(coalesce(new.data->>'note', ''), 300), 'by', me::text, 'at', (extract(epoch from now()) * 1000)::bigint);
+                                   'note', left(coalesce(new.data->>'note', ''), 300), 'by', me::text, 'at', (extract(epoch from now()) * 1000)::bigint, 'status', 'open');
 
   elsif new.col = 'invites' then
     if tg_op = 'INSERT' then
@@ -697,11 +737,138 @@ language sql stable security definer set search_path = '' as $$
     and coalesce(a.data->>'hideOnline', 'false') <> 'true' and ac.last_seen > now() - interval '3 minutes';
 $$;
 
+---------------------------------------------------------------------------
+-- marketplace admin: every action checks the caller is an admin and is written to admin_log
+---------------------------------------------------------------------------
+create or replace function public.admin_check() returns uuid
+language plpgsql stable security definer set search_path = '' as $$
+begin
+  if not public.is_admin() then raise exception 'Admins only' using errcode = '42501'; end if;
+  return (select auth.uid());
+end $$;
+create or replace function public.admin_note(p_action text, p_target text, p_note text) returns void
+language sql security definer set search_path = '' as $$
+  insert into public.admin_log (admin, action, target, note) values ((select auth.uid()), p_action, left(coalesce(p_target, ''), 120), left(coalesce(p_note, ''), 300));
+$$;
+
+-- hide a listing from Gear ('removed') or put it back ('active')
+create or replace function public.admin_listing_status(p_listing text, p_status text, p_note text default '') returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  perform public.admin_check();
+  if p_status not in ('removed', 'active') then raise exception 'Pick removed or active'; end if;
+  perform set_config('dugout.admin', 'on', true);
+  update public.docs set data = data || jsonb_build_object('status', p_status, 'removedNote', case when p_status = 'removed' then left(coalesce(p_note, ''), 300) else null end)
+    where scope = 'global' and col = 'listings' and id = p_listing;
+  if not found then raise exception 'No such listing'; end if;
+  perform set_config('dugout.admin', '', true);
+  perform public.admin_note(case when p_status = 'removed' then 'remove listing' else 'restore listing' end, p_listing, p_note);
+end $$;
+
+-- delete a listing and its conversations for good (its photos are removed by the admin page)
+create or replace function public.admin_delete_listing(p_listing text, p_note text default '') returns void
+language plpgsql security definer set search_path = '' as $$
+declare t text;
+begin
+  perform public.admin_check();
+  select data->>'title' into t from public.docs where scope = 'global' and col = 'listings' and id = p_listing;
+  delete from public.docs where scope = 'global' and col = 'messages' and data->>'thread' in
+    (select id from public.docs where scope = 'global' and col = 'threads' and data->>'listing' = p_listing);
+  delete from public.docs where scope = 'global' and col = 'threads' and data->>'listing' = p_listing;
+  delete from public.docs where scope = 'global' and col = 'listings' and id = p_listing;
+  perform public.admin_note('delete listing', p_listing, coalesce(t, '') || case when coalesce(p_note, '') <> '' then ': ' || p_note else '' end);
+end $$;
+
+-- close a report
+create or replace function public.admin_resolve_report(p_report text, p_outcome text, p_note text default '') returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  perform public.admin_check();
+  if p_outcome not in ('actioned', 'dismissed', 'open') then raise exception 'Pick actioned, dismissed or open'; end if;
+  perform set_config('dugout.admin', 'on', true);
+  update public.docs set data = data || jsonb_build_object('status', p_outcome, 'closedNote', left(coalesce(p_note, ''), 300),
+      'closedAt', (extract(epoch from now()) * 1000)::bigint, 'closedBy', (select auth.uid())::text)
+    where scope = 'global' and col = 'reports' and id = p_report;
+  perform set_config('dugout.admin', '', true);
+  perform public.admin_note('report ' || p_outcome, p_report, p_note);
+end $$;
+
+-- ban someone from Gear (listing, messaging); optionally hide everything they have up for sale
+create or replace function public.admin_ban(p_user uuid, p_reason text, p_days int default null, p_hide_listings boolean default true) returns void
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := public.admin_check();
+begin
+  if p_user = me then raise exception 'You can''t ban yourself'; end if;
+  if exists (select 1 from public.admins where user_id = p_user) then raise exception 'That person is an admin'; end if;
+  insert into public.market_bans (user_id, reason, by, until) values (p_user, left(coalesce(p_reason, ''), 300), me, case when p_days is null then null else now() + make_interval(days => p_days) end)
+    on conflict (user_id) do update set reason = excluded.reason, by = excluded.by, at = now(), until = excluded.until;
+  if p_hide_listings then
+    perform set_config('dugout.admin', 'on', true);
+    update public.docs set data = data || jsonb_build_object('status', 'removed', 'removedNote', 'Seller banned')
+      where scope = 'global' and col = 'listings' and owner = p_user and coalesce(data->>'status', 'active') in ('active', 'pending');
+    perform set_config('dugout.admin', '', true);
+  end if;
+  perform public.admin_note('ban', p_user::text, coalesce(p_reason, '') || case when p_days is null then '' else ' (' || p_days || ' days)' end);
+end $$;
+create or replace function public.admin_unban(p_user uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  perform public.admin_check();
+  delete from public.market_bans where user_id = p_user;
+  perform public.admin_note('unban', p_user::text, '');
+end $$;
+
+-- what the admin page shows
+create or replace function public.admin_overview() returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+begin
+  perform public.admin_check();
+  return jsonb_build_object(
+    'listings', (select jsonb_object_agg(st, n) from (select coalesce(data->>'status', 'active') st, count(*) n from public.docs where scope = 'global' and col = 'listings' group by 1) x),
+    'newListings7', (select count(*) from public.docs where scope = 'global' and col = 'listings' and created_at > now() - interval '7 days'),
+    'openReports', (select count(*) from public.docs where scope = 'global' and col = 'reports' and coalesce(data->>'status', 'open') = 'open'),
+    'conversations7', (select count(*) from public.docs where scope = 'global' and col = 'threads' and created_at > now() - interval '7 days'),
+    'messages7', (select count(*) from public.docs where scope = 'global' and col = 'messages' and created_at > now() - interval '7 days'),
+    'sellers', (select count(distinct owner) from public.docs where scope = 'global' and col = 'listings'),
+    'bans', (select count(*) from public.market_bans where until is null or until > now()),
+    'people', (select count(*) from public.profiles));
+end $$;
+create or replace function public.admin_bans() returns table (user_id uuid, name text, reason text, at timestamptz, until timestamptz, by_name text)
+language plpgsql stable security definer set search_path = '' as $$
+begin
+  perform public.admin_check();
+  return query select b.user_id, p.display_name, b.reason, b.at, b.until, q.display_name
+    from public.market_bans b left join public.profiles p on p.id = b.user_id left join public.profiles q on q.id = b.by order by b.at desc;
+end $$;
+create or replace function public.admin_activity() returns table (at timestamptz, admin_name text, action text, target text, note text)
+language plpgsql stable security definer set search_path = '' as $$
+begin
+  perform public.admin_check();
+  return query select l.at, p.display_name, l.action, l.target, l.note from public.admin_log l left join public.profiles p on p.id = l.admin order by l.at desc limit 200;
+end $$;
+-- for showing a seller's history next to a report
+create or replace function public.admin_user_summary(p_user uuid) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+begin
+  perform public.admin_check();
+  return jsonb_build_object(
+    'name', (select display_name from public.profiles where id = p_user),
+    'joined', (select created_at from public.profiles where id = p_user),
+    'listings', (select count(*) from public.docs where scope = 'global' and col = 'listings' and owner = p_user),
+    'removed', (select count(*) from public.docs where scope = 'global' and col = 'listings' and owner = p_user and data->>'status' = 'removed'),
+    'reportsAgainst', (select count(*) from public.docs r join public.docs l on l.scope = 'global' and l.col = 'listings' and l.id = r.data->>'listing'
+                       where r.scope = 'global' and r.col = 'reports' and l.owner = p_user),
+    'banned', (select jsonb_build_object('reason', reason, 'until', until) from public.market_bans where user_id = p_user and (until is null or until > now())));
+end $$;
+
 -- nobody signed out can call any of these; signed-in users can call only the app's actions
 revoke execute on all functions in schema public from public, anon;
 grant execute on function public.create_team(text), public.join_team(text), public.reset_join_code(uuid),
   public.claim_player(uuid, text), public.unclaim_player(uuid, text), public.doc_update(text, text, text, jsonb),
   public.delete_my_account(), public.mark_thread_seen(text), public.reset_cal_token(), public.i_am_here(), public.online_subs() to authenticated;
+grant execute on function public.is_admin(), public.is_market_banned(), public.admin_listing_status(text, text, text), public.admin_delete_listing(text, text),
+  public.admin_resolve_report(text, text, text), public.admin_ban(uuid, text, int, boolean), public.admin_unban(uuid),
+  public.admin_overview(), public.admin_bans(), public.admin_activity(), public.admin_user_summary(uuid) to authenticated;
 grant execute on function public.is_paid_captain() to authenticated;
 grant execute on function public.is_member(text), public.is_captain(text), public.is_any_captain(), public.shares_team(uuid),
   public.contact_unlocked(text), public.owns_player(text, text), public.in_thread(text) to authenticated;
@@ -723,6 +890,8 @@ grant execute on function public.my_photo_count() to authenticated;
 drop policy if exists "dugout photos: see own" on storage.objects;
 drop policy if exists "dugout photos: upload own" on storage.objects;
 drop policy if exists "dugout photos: delete own" on storage.objects;
+drop policy if exists "dugout photos: admin" on storage.objects;
+drop policy if exists "dugout photos: admin delete" on storage.objects;
 create policy "dugout photos: see own" on storage.objects for select to authenticated
   using (bucket_id = 'listing-photos' and (storage.foldername(name))[1] = (select auth.uid())::text);
 create policy "dugout photos: upload own" on storage.objects for insert to authenticated
@@ -738,3 +907,12 @@ do $$ begin
     alter publication supabase_realtime add table public.docs;
   end if;
 end $$;
+
+-- admins can list and delete any listing photo (to clean up a removed listing)
+create policy "dugout photos: admin" on storage.objects for select to authenticated
+  using (bucket_id = 'listing-photos' and public.is_admin());
+create policy "dugout photos: admin delete" on storage.objects for delete to authenticated
+  using (bucket_id = 'listing-photos' and public.is_admin());
+
+-- To make someone an admin (run once in the SQL editor, with their sign-in email):
+--   insert into public.admins (user_id) select id from auth.users where email = 'you@example.com' on conflict do nothing;

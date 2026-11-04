@@ -37,7 +37,7 @@ function browse(c) {
   const { st, esc, LS } = c, box = document.getElementById('gearBody');
   const from = G.from;
   let list = st.listings.map(l => ({ l, d: from && l.lat != null ? c.km(from, l) : null })).filter(({ l, d }) =>
-    (G.showSold || l.status !== 'sold') &&
+    l.status !== 'removed' && (G.showSold || l.status !== 'sold') &&
     (!G.cat || l.cat === G.cat) &&
     (!G.max || (+l.price || 0) <= +G.max) &&
     (!G.km || !from || (d != null && d <= G.km)) &&
@@ -76,7 +76,7 @@ function browse(c) {
 function card(c, l, d) {
   const { esc, platform } = c, ph = (l.photos || [])[0];
   return `<a class="panel gear-card" href="#gear" data-item="${esc(l.id)}">
-    <div class="gear-ph">${ph ? `<img src="${esc(platform.photos.url(ph))}" alt="" loading="lazy">` : `<span aria-hidden="true">${catIcon(l.cat)}</span>`}${l.status !== 'active' ? `<span class="gear-flag">${l.status === 'sold' ? 'Sold' : 'Pending'}</span>` : ''}</div>
+    <div class="gear-ph">${ph ? `<img src="${esc(platform.photos.url(ph))}" alt="" loading="lazy">` : `<span aria-hidden="true">${catIcon(l.cat)}</span>`}${l.status !== 'active' ? `<span class="gear-flag">${l.status === 'sold' ? 'Sold' : l.status === 'removed' ? 'Removed' : 'Pending'}</span>` : ''}</div>
     <div class="gear-price">${esc(price(l.price))}</div>
     <div class="gear-title">${esc(l.title)}</div>
     <div class="muted small">${esc(label(CONDS, l.cond))}${d != null ? ` · ${d < 1 ? '<1' : Math.round(d)} km` : l.area ? ` · ${esc(l.area)}` : ''}</div>
@@ -96,7 +96,7 @@ function item(c) {
   <article class="panel">
     ${photos.length ? `<div class="gear-gallery"><img id="gbig" src="${esc(platform.photos.url(photos[0]))}" alt="${esc(l.title)}">${photos.length > 1 ? `<div class="row">${photos.map((p, i) => `<button type="button" class="gear-thumb" data-ph="${i}" aria-label="Photo ${i + 1}"><img src="${esc(platform.photos.url(p))}" alt=""></button>`).join('')}</div>` : ''}</div>` : ''}
     <div class="row" style="align-items:baseline"><h3 class="grow" style="margin:0;font-size:1.4em">${esc(l.title)}</h3><span class="gear-price" style="font-size:1.6em">${esc(price(l.price))}</span></div>
-    <div class="row" style="margin:6px 0 10px">${l.status !== 'active' ? `<span class="pill ${l.status === 'sold' ? 'out' : 'maybe'}">${l.status === 'sold' ? 'Sold' : 'Sale pending'}</span>` : ''}<span class="pill in">${esc(label(CONDS, l.cond))}</span><span class="pill" style="border:1.5px solid var(--line)">${esc(label(CATS, l.cat))}</span></div>
+    <div class="row" style="margin:6px 0 10px">${l.status !== 'active' ? `<span class="pill ${l.status === 'sold' || l.status === 'removed' ? 'out' : 'maybe'}">${l.status === 'sold' ? 'Sold' : l.status === 'removed' ? 'Removed by Dugout' : 'Sale pending'}</span>` : ''}${l.status === 'removed' ? `<p class="small" style="flex-basis:100%;margin:6px 0 0">Dugout took this listing down${l.removedNote ? `: ${esc(l.removedNote)}` : ''}. Only you can see it. You can delete it, or contact Dugout if you think it’s a mistake.</p>` : ''}<span class="pill in">${esc(label(CONDS, l.cond))}</span><span class="pill" style="border:1.5px solid var(--line)">${esc(label(CATS, l.cat))}</span></div>
     <dl class="gear-facts">
       ${l.brand ? `<dt>Brand</dt><dd>${esc(l.brand)}</dd>` : ''}
       ${l.size ? `<dt>Size</dt><dd>${esc(l.size)}</dd>` : ''}
@@ -108,11 +108,11 @@ function item(c) {
     ${l.desc ? `<p style="white-space:pre-wrap">${esc(l.desc)}</p>` : ''}
     ${l.cat === 'bat' ? `<p class="notice small">Check the certification stamp against your league’s approved bat list before you buy. Many leagues ban altered or uncertified bats.</p>` : ''}
     <div class="row" style="margin-top:10px">
-      ${mine ? `<button class="btn" type="button" id="gedit">Edit</button>
+      ${mine && l.status === 'removed' ? `<button class="btn danger" type="button" id="gdel">Delete</button>` : mine ? `<button class="btn" type="button" id="gedit">Edit</button>
         <button class="btn ghost" type="button" data-st="${l.status === 'sold' ? 'active' : 'sold'}">${l.status === 'sold' ? 'Relist' : 'Mark sold'}</button>
         ${l.status === 'active' ? '<button class="btn ghost" type="button" data-st="pending">Mark pending</button>' : l.status === 'pending' ? '<button class="btn ghost" type="button" data-st="active">Back to available</button>' : ''}
         <button class="btn danger" type="button" id="gdel">Delete</button>`
-      : l.status === 'sold' ? '' : `<button class="btn" type="button" id="gmsg">${th ? 'Open conversation' : 'Message seller'}</button>`}
+      : l.status === 'sold' || l.status === 'removed' ? '' : `<button class="btn" type="button" id="gmsg">${th ? 'Open conversation' : 'Message seller'}</button>`}
     </div>
   </article>
   <div class="panel small" style="margin-top:12px"><b>Buying safely:</b> meet somewhere public and busy, look the item over before paying, and never send money or a deposit to someone you haven’t met. Dugout doesn’t handle payments.</div>

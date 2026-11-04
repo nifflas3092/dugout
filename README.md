@@ -133,6 +133,24 @@ Forecasts come from MET Norway and cover about the next 9 days. They're free to 
 - Buy a domain (about $15 a year) and add it in Vercel under **Settings → Domains**. Then update the URLs from step 2.
 - When you change code, bump `VERSION` in `sw.js` so phones pick up the update.
 
+## Gear admin (marketplace moderation)
+
+`admin.html` (also in the Menu for admins) is the back office for Gear:
+
+- **Overview:** live listings, sold, removed, open reports, new listings and conversations this week, bans.
+- **Reports:** every report with the reporter's note and the listing. Remove, delete, ban the seller, see the seller's history, then mark it dealt with or dismiss it.
+- **Listings:** search and filter every listing (live, pending, sold, removed) and moderate any of them.
+- **Bans:** who's banned from Gear, why and until when. Lift a ban.
+- **Activity:** every admin action, who did it and when.
+
+Removing hides a listing from everyone but the seller, who can't relist it. Deleting erases it with its photos and conversations. A ban stops listing and messaging in Gear (7 days, 30 days or until lifted) without touching teams. Admins can't read private buyer and seller messages. All of it is enforced by the database (`admin_*` functions), and every action is logged.
+
+To make someone an admin, run this once in the Supabase SQL editor with their sign-in email:
+
+```sql
+insert into public.admins (user_id) select id from auth.users where email = 'you@example.com' on conflict do nothing;
+```
+
 ## Updating Slowpitch Showdown
 
 The game lives in `game/` and opens from the Showdown tab. It's a copy of the single-file game from the game chat, adjusted for the site. To update it with a new version:

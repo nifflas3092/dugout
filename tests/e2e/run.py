@@ -5,7 +5,8 @@ from playwright.async_api import async_playwright
 import os
 HERE=os.path.dirname(os.path.abspath(__file__)); APP=os.path.abspath(os.path.join(HERE,'..','..')); FAKE=open(os.path.join(HERE,'fake-supabase.js')).read(); OUT=os.path.join(HERE,'screenshots')+'/'; os.makedirs(OUT,exist_ok=True)
 CFG="export const SUPABASE_URL='https://fake.supabase.co';export const SUPABASE_ANON_KEY='x';export const GEOCODER='nominatim';export const MAPBOX_TOKEN='';export const CAPTAIN_PRICE='$5/month';export const ADFREE_PRICE='$7.99';export const GOOGLE_MAPS_KEY='';"
-INDEX=re.sub(r' integrity="[^"]+"','',open(APP+'/index.html').read())  # the test double can't match the real library's hash
+INDEX=re.sub(r' integrity="[^"]+"','',open(APP+'/index.html').read())
+ADMIN=re.sub(r' integrity="[^"]+"','',open(APP+'/admin.html').read())  # the test double can't match the real library's hash
 srv=subprocess.Popen([sys.executable,'-m','http.server','8766','-d',APP],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 errs=[]; checks=[]
 def check(name, cond, extra=''): checks.append(bool(cond)); print(('PASS ' if cond else 'FAIL ')+name+('' if cond or not extra else '   -> '+str(extra)[:300]))
@@ -27,6 +28,7 @@ async def setup(ctx):
   await ctx.route('https://cdn.jsdelivr.net/**', lambda r: r.fulfill(body=FAKE, content_type='application/javascript'))
   await ctx.route('**/config.js', lambda r: r.fulfill(body=CFG, content_type='application/javascript'))
   await ctx.route(re.compile(r'http://localhost:8766/(index\.html)?(\?.*)?$'), lambda r: r.fulfill(body=INDEX, content_type='text/html'))
+  await ctx.route(re.compile(r'http://localhost:8766/admin\.html(\?.*)?(#.*)?$'), lambda r: r.fulfill(body=ADMIN, content_type='text/html'))
   await ctx.route('https://nominatim.openstreetmap.org/**', lambda r: r.fulfill(body=json.dumps([{"lat":"43.65","lon":"-79.51","name":"Etobicoke","address":{"suburb":"Etobicoke","city":"Toronto","state":"Ontario"},"display_name":"Etobicoke, Toronto"}]), content_type='application/json'))
   await ctx.route('https://fonts.**', lambda r: r.abort())
 async def page(ctx, user, w=1280, h=860, pending=None):
@@ -323,6 +325,36 @@ async def main():
     await cap.click('[data-gm=browse]'); await cap.wait_for_timeout(400)
     check('sold items hidden from browse by default', await cap.locator('.gear-card').count()==0)
 
+    # ---- Gear admin: reports, remove, ban, activity
+    lid=await pl.evaluate("JSON.parse(localStorage.getItem('fake-sb-db')).docs.find(d=>d.col==='listings').id")
+    await pl.evaluate("(async()=>{const d=JSON.parse(localStorage.getItem('fake-sb-db'));const l=d.docs.find(x=>x.col==='listings');l.data.status='active';localStorage.setItem('fake-sb-db',JSON.stringify(d));})()")
+    await cap.evaluate(f"(()=>{{const d=JSON.parse(localStorage.getItem('fake-sb-db'));d.docs.push({{scope:'global',col:'reports',id:'rep1',owner:'u-cap',data:{{listing:'{lid}',reason:'scam',note:'Asked for an e-transfer deposit',status:'open',by:'u-cap',at:Date.now()}}}});localStorage.setItem('fake-sb-db',JSON.stringify(d));}})()")
+    await pl.goto('http://localhost:8766/admin.html'); await pl.wait_for_timeout(800)
+    check('non-admins are turned away from the admin page', 'Admins only' in await pl.inner_text('#aview'))
+    await cap.evaluate("(()=>{const d=JSON.parse(localStorage.getItem('fake-sb-db'));d.admins=['u-cap'];localStorage.setItem('fake-sb-db',JSON.stringify(d));})()")
+    await cap.goto('http://localhost:8766/#home'); await cap.wait_for_timeout(500)
+    await cap.click(".tools .chip-btn:has-text('Menu')"); await cap.wait_for_selector('dialog.menu[open]')
+    check('admins get a Gear admin link in the menu', await cap.locator('dialog.menu a[href="admin.html"]').count()==1)
+    await cap.goto('http://localhost:8766/admin.html#reports'); await cap.wait_for_selector('.admin-card')
+    t=await cap.inner_text('#aview')
+    check('admin sees the open report with the listing and the reporter’s note', 'Scam or fraud' in t and 'e-transfer deposit' in t and 'Miken Freak' in t and await cap.inner_text('#repBadge')=='1')
+    await cap.screenshot(path=OUT+'v12_admin_reports.png', full_page=True)
+    await cap.click('.admin-card [data-remove]'); await cap.wait_for_selector('#adlg[open]'); await cap.fill('#askN','Scam report'); await cap.click('#askF button[type=submit]'); await cap.wait_for_timeout(700)
+    st=await cap.evaluate(f"JSON.parse(localStorage.getItem('fake-sb-db')).docs.find(x=>x.id==='{lid}').data.status")
+    check('Remove takes the listing down', st=='removed')
+    await cap.click('[data-close][data-outcome="actioned"]'); await cap.wait_for_timeout(600)
+    check('closing the report clears the queue', 'Nothing to review' in await cap.inner_text('#aview'))
+    await cap.goto('http://localhost:8766/admin.html#listings'); await cap.wait_for_selector('.admin-card')
+    await cap.click('.admin-card [data-ban]'); await cap.wait_for_selector('#adlg[open]'); await cap.fill('#askN','Scamming buyers'); await cap.click('#askF button[type=submit]'); await cap.wait_for_timeout(700)
+    await cap.goto('http://localhost:8766/admin.html#bans'); await cap.wait_for_timeout(600)
+    check('ban shows on the Bans list', 'Scamming buyers' in await cap.inner_text('#aview') and 'Jordan' in await cap.inner_text('#aview'))
+    await cap.goto('http://localhost:8766/admin.html#activity'); await cap.wait_for_timeout(600)
+    t=await cap.inner_text('#aview'); check('every action is in the activity log', 'remove listing' in t and 'ban' in t and 'report actioned' in t)
+    await cap.screenshot(path=OUT+'v12_admin_activity.png', full_page=True)
+    await pl.goto('http://localhost:8766/#gear'); await pl.wait_for_timeout(500)
+    check('the removed listing is gone from Gear', await pl.locator('.gear-card').count()==0 or 'Miken' not in await pl.inner_text('#gearBody'))
+    await cap.goto('http://localhost:8766/admin.html#bans'); await cap.wait_for_selector('[data-unban]'); await cap.click('[data-unban]'); await cap.wait_for_timeout(500)
+    await cap.goto('http://localhost:8766/#home'); await cap.wait_for_timeout(400)
     await pl.click(".tools .chip-btn:has-text('Menu')"); await pl.wait_for_selector('dialog.menu[open]')
     check('player menu has no captain controls', await pl.locator('#mNewCode, [data-kick]').count()==0)
     await pl.click('dialog.menu summary:has-text("Delete my account")'); await pl.fill('#mDelT','nope'); await pl.click('#mDel .btn'); await pl.wait_for_timeout(200)

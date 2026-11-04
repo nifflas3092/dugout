@@ -1,8 +1,10 @@
 // In-browser stand-in for @supabase/supabase-js, for testing the Dugout app without a real backend.
 // State lives in localStorage so several pages (users) in one browser context share it, like a server.
 const K = 'fake-sb-db';
-const load = () => { const d = JSON.parse(localStorage.getItem(K) || '{"profiles":[],"teams":[],"team_members":[],"docs":[]}'); d.accounts = d.accounts || []; d.users = d.users || []; d.seen = d.seen || {}; return d; };
+const load = () => { const d = JSON.parse(localStorage.getItem(K) || '{"profiles":[],"teams":[],"team_members":[],"docs":[]}'); d.accounts = d.accounts || []; d.users = d.users || []; d.seen = d.seen || {}; d.admins = d.admins || []; d.bans = d.bans || []; d.log = d.log || []; return d; };
 const acct = (d, id) => { let a = d.accounts.find(x => x.user_id === id); if (!a) { a = { user_id: id, captain_status: 'none', captain_until: null, grandfathered: false, ad_free: false, cal_token: 'c'.repeat(64) }; d.accounts.push(a); } return a; };
+const isAdm = d => d.admins.includes(ME()?.id);
+const banned = d => d.bans.some(b => b.user_id === ME()?.id);
 const paid = (d, id) => { const a = acct(d, id); return a.grandfathered || ['active', 'trialing'].includes(a.captain_status); };
 const save = d => { localStorage.setItem(K, JSON.stringify(d)); bc.postMessage('x'); };
 const bc = new BroadcastChannel('fake-sb');
@@ -21,8 +23,8 @@ function canWriteDoc(d, r, old) {
     return false;
   }
   if (r.col === 'agents' || r.col === 'contacts') return r.id === ME().id;
-  if (r.col === 'listings') return !old || old.owner === ME().id;
-  if (r.col === 'threads') return !old && r.id.endsWith('_' + ME().id);
+  if (r.col === 'listings') return (!old || old.owner === ME().id) && (r === old || (!banned(d) && !(old && old.data.status === 'removed') && r.data.status !== 'removed'));
+  if (r.col === 'threads') return !old && !banned(d) && r.id.endsWith('_' + ME().id);
   if (r.col === 'messages') { const t = d.docs.find(x => x.col === 'threads' && x.id === r.data.thread); return !old && t && (t.data.buyer === ME().id || t.data.seller === ME().id); }
   if (r.col === 'reports') return !old;
   if (r.col === 'diamonds') return old ? old.owner === ME().id : d.team_members.some(m => m.user_id === ME().id && m.role === 'captain');
@@ -35,7 +37,8 @@ function canRead(d, table, r) {
     if (r.col === 'invites') return r.owner === ME().id || r.data.agent === ME().id;
     if (r.col === 'threads') return r.data.buyer === ME().id || r.data.seller === ME().id;
     if (r.col === 'messages') { const t = d.docs.find(x => x.col === 'threads' && x.id === r.data.thread); return t && (t.data.buyer === ME().id || t.data.seller === ME().id); }
-    if (r.col === 'reports') return false;
+    if (r.col === 'reports') return isAdm(d);
+    if (r.col === 'listings' && r.data.status === 'removed') return r.owner === ME().id || isAdm(d);
     if (r.col === 'agents') return r.id === ME().id || paid(d, ME().id);
     return r.scope === 'global' || isMember(d, r.scope);
   }
@@ -56,6 +59,7 @@ class Q {
   delete() { this.op = 'delete'; return this; }
   maybeSingle() { this.single = true; return this; }
   order() { return this; }
+  limit() { return this; }
   then(res, rej) { return Promise.resolve().then(() => this.run()).then(res, rej); }
   run() {
     const d = load(); if (this.t === 'accounts' && ME()) acct(d, ME().id); const rows = d[this.t]; const hit = r => this.f.every(f => f(r));
@@ -69,6 +73,7 @@ class Q {
       if (this.t === 'docs') { if (!canWriteDoc(d, r, old)) return denied(); r.owner = old ? old.owner : ME().id;
         if (r.col === 'players' && old) r.data = { ...r.data, uid: old.data.uid }; if (r.col === 'players' && !old) delete r.data.uid;
         if (r.col === 'posts' || r.col === 'chat') r.data.u = r.owner;
+        if (r.col === 'reports' && !old) { r.data.status = 'open'; r.data.by = r.owner; r.data.at = Date.now(); }
         if (r.col === 'chat') { if (!String(r.data.text || '').trim()) return { data: null, error: { code: 'P0001', message: 'Messages are 1 to 1000 characters' } }; r.data.at = Date.now(); }
         if (r.col === 'listings') r.data.seller = r.owner;
         if (r.col === 'threads' && !old) { const l = d.docs.find(x => x.col === 'listings' && x.id === r.data.listing); if (!l || l.owner === ME().id) return { data: null, error: { code: 'P0001', message: 'That’s your own listing' } }; r.data = { listing: l.id, buyer: ME().id, seller: l.owner, title: l.data.title, at: Date.now() }; }
@@ -117,6 +122,25 @@ function createClient() {
     } },
     async rpc(name, a) {
       const d = load();
+      if (name === 'is_admin') return { data: isAdm(d), error: null };
+      if (name.startsWith('admin_')) {
+        if (!isAdm(d)) return { data: null, error: { code: '42501', message: 'Admins only' } };
+        const note = (act, target, n) => { d.log.unshift({ at: new Date().toISOString(), admin: ME().id, action: act, target, note: n || '' }); };
+        const L = id => d.docs.find(x => x.col === 'listings' && x.id === id);
+        const pname = id => (d.profiles.find(p => p.id === id) || {}).display_name;
+        if (name === 'admin_overview') { const ls = d.docs.filter(x => x.col === 'listings'), by = {}; ls.forEach(l => by[l.data.status || 'active'] = (by[l.data.status || 'active'] || 0) + 1);
+          return { data: { listings: by, newListings7: ls.length, openReports: d.docs.filter(x => x.col === 'reports' && (x.data.status || 'open') === 'open').length, conversations7: 0, messages7: 0, sellers: new Set(ls.map(l => l.owner)).size, bans: d.bans.length, people: d.profiles.length }, error: null }; }
+        if (name === 'admin_listing_status') { const l = L(a.p_listing); l.data.status = a.p_status; l.data.removedNote = a.p_status === 'removed' ? a.p_note : null; note(a.p_status === 'removed' ? 'remove listing' : 'restore listing', a.p_listing, a.p_note); save(d); return { data: null, error: null }; }
+        if (name === 'admin_delete_listing') { d.docs = d.docs.filter(x => !(x.col === 'listings' && x.id === a.p_listing)); note('delete listing', a.p_listing, a.p_note); save(d); return { data: null, error: null }; }
+        if (name === 'admin_resolve_report') { const r = d.docs.find(x => x.col === 'reports' && x.id === a.p_report); r.data.status = a.p_outcome; note('report ' + a.p_outcome, a.p_report, a.p_note); save(d); return { data: null, error: null }; }
+        if (name === 'admin_ban') { d.bans = d.bans.filter(b => b.user_id !== a.p_user); d.bans.push({ user_id: a.p_user, reason: a.p_reason, at: new Date().toISOString(), until: a.p_days ? new Date(Date.now() + a.p_days * 864e5).toISOString() : null, by: ME().id });
+          if (a.p_hide_listings) d.docs.filter(x => x.col === 'listings' && x.owner === a.p_user && ['active', 'pending'].includes(x.data.status || 'active')).forEach(x => { x.data.status = 'removed'; x.data.removedNote = 'Seller banned'; });
+          note('ban', a.p_user, a.p_reason); save(d); return { data: null, error: null }; }
+        if (name === 'admin_unban') { d.bans = d.bans.filter(b => b.user_id !== a.p_user); note('unban', a.p_user, ''); save(d); return { data: null, error: null }; }
+        if (name === 'admin_bans') return { data: d.bans.map(b => ({ ...b, name: pname(b.user_id), by_name: pname(b.by) })), error: null };
+        if (name === 'admin_activity') return { data: d.log.map(l => ({ ...l, admin_name: pname(l.admin) })), error: null };
+        if (name === 'admin_user_summary') return { data: { name: pname(a.p_user), joined: new Date().toISOString(), listings: d.docs.filter(x => x.col === 'listings' && x.owner === a.p_user).length, removed: 0, reportsAgainst: 1, banned: null }, error: null };
+      }
       if (name === 'create_team' && !paid(d, ME().id)) return { data: null, error: { code: 'P0001', message: 'Starting a team is a captain feature. Upgrade to captain first.' } };
       if (name === 'i_am_here') { d.seen[ME().id] = Date.now(); save(d); return { data: null, error: null }; }
       if (name === 'online_subs') return { data: paid(d, ME().id) ? d.docs.filter(x => x.col === 'agents' && !x.data.hideOnline && Date.now() - (d.seen[x.id] || 0) < 180000).map(x => x.id) : [], error: null };

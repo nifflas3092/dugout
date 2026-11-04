@@ -284,6 +284,7 @@ async function teamMenu(session, account, team, teams, myName, section) {
   const link = team ? `${location.origin}${location.pathname}?join=${encodeURIComponent(team.join_code)}` : '';
   const { data: members } = team ? await sb.from('team_members').select('user_id, role, profiles(display_name)').eq('team_id', team.id).order('joined_at') : { data: [] };
   const list = members || [];
+  const { data: isAdmin } = await sb.rpc('is_admin').then(r => r, () => ({ data: false }));
   const feed = account.cal_token ? `${SUPABASE_URL}/functions/v1/calendar?t=${account.cal_token}` : '';
   const webcal = feed.replace(/^https:/, 'webcal:');
   const planLine = account.captain ? (account.grandfathered ? 'Captain (free, from before paid plans)' : `Captain, ${esc(CAPTAIN_PRICE)}${account.captain_until ? `. Renews ${esc(new Date(account.captain_until).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }))}` : ''}`) : 'Player (free)';
@@ -305,6 +306,7 @@ async function teamMenu(session, account, team, teams, myName, section) {
   <section id="mPrefs"><h3>Display &amp; accessibility</h3>${prefsForm('mp')}</section>
   <section><h3>Teams</h3>${teams.filter(t => !team || t.id !== team.id).map(t => `<div class="mrow"><span class="grow">${esc(t.name)}</span><button class="btn ghost small" type="button" data-switch="${esc(t.id)}">Switch</button></div>`).join('')}
     <div class="mrow"><button class="btn ghost small" type="button" id="mOther">${team ? 'Join or start another team' : 'Join or start a team'}</button>${team ? `<button class="btn ghost small" type="button" id="mLeave">Leave ${esc(team.name)}</button>` : ''}</div></section>
+  ${isAdmin ? `<section id="mAdmin"><h3>Admin</h3><div class="mrow"><span class="grow small muted">Reports, listings and bans for Gear</span><a class="btn small" href="admin.html">Gear admin</a></div></section>` : ''}
   <section id="mAcct"><h3>Account</h3>
     <form class="mrow" id="mName"><label for="mN" class="grow">Your name<input id="mN" type="text" maxlength="40" value="${esc(myName)}"></label><button class="btn small" type="submit" style="align-self:flex-end">Save</button></form>
     <details><summary class="small">Change password</summary><form id="mPw" style="margin-top:8px">${pwField('mPwI', 'New password <span class="muted small">(8 or more)</span>', 'new-password', 'minlength="8"')}<div class="row"><button class="btn small" type="submit">Save password</button></div></form></details>
