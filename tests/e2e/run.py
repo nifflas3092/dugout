@@ -109,7 +109,7 @@ async def main():
     check('captain sees the RSVP live', '1 in' in (await cap.inner_text('#view')).lower())
     await cap.goto('http://localhost:8766/#home'); await cap.wait_for_selector('.matchup'); await cap.wait_for_timeout(300)
     t=await cap.inner_text('#view')
-    check('captain Home: matchup card, squad count and a to-do list', '1 of 10 in' in t and 'Before the next game' in t and 'Build the lineup' in t)
+    check('captain Home: matchup card, squad count and a to-do list', '1 of 10 in' in t and 'before the next game' in t.lower() and 'Build the lineup' in t)
     await cap.screenshot(path=OUT+'v7_home_captain.png', full_page=True)
     await cap.set_viewport_size({'width':400,'height':860}); await cap.screenshot(path=OUT+'v7_home_phone.png', full_page=True); await cap.set_viewport_size({'width':1280,'height':860})
     await pl.goto('http://localhost:8766/#home'); await pl.wait_for_selector('.mu-btns')
@@ -143,7 +143,7 @@ async def main():
     await cap.wait_for_timeout(500); t=await cap.inner_text('#subBody')
     check('after yes, captain sees contact', '416-555-0100' in t)
     await pl.wait_for_timeout(300); t2=await pl.inner_text('#subBody')
-    check('answered requests move to Invite history', 'Invite history' in t2 and 'You said yes' in t2 and 'Requests from captains' not in t2)
+    check('answered requests move to Invite history', 'invite history' in t2.lower() and 'You said yes' in t2 and 'requests from captains' not in t2.lower())
     await cap.screenshot(path=OUT+'v2_5_contact.png', full_page=True)
 
     # ---- online now, sub list gate, ads, team chat, schedule import

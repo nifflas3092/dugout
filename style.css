@@ -653,3 +653,44 @@ h2 { letter-spacing: -0.015em; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) :where(a:not(.btn)) { color: #7dd3a0; } }
 :root[data-theme="dark"] :where(a:not(.btn)) { color: #7dd3a0; }
 @media (min-width: 900px) { .wrap { padding-top: 0; } }
+
+/* ---------- borders: framed banners, boxed labels, outlined sections ---------- */
+:root { --frame: #cbd5e1; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --frame: #334155; } }
+:root[data-theme="dark"] { --frame: #334155; }
+/* the green header banner gets a gold rule along its bottom edge, full width */
+header.top { box-shadow: 0 0 0 100vmax var(--grass), 0 3px 0 100vmax var(--gold); clip-path: inset(0 -100vmax -3px); margin-bottom: 17px; }
+header.top .crest { box-shadow: 0 0 0 2px var(--gold); }
+header.top .chip-btn { border-color: rgb(255 255 255 / .55); }
+/* page titles: a green bar down the left */
+h2 { border-left: 4px solid var(--grass); padding-left: 10px; }
+.matchup h2, .gate h2, dialog h2, .panel h2, .upgrade h2, .card h2 { border-left: 0; padding-left: 0; }
+/* section labels: small boxed tags */
+.home-block > h3, dialog.menu section > h3, .inv-history ~ h3, #subBody > h3 {
+  display: inline-block; border: 1px solid var(--frame); border-radius: 8px; padding: 4px 10px; background: var(--surface);
+  font-size: .78em; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: 10px; }
+/* cards and panels: a clearer outline */
+.panel, .tile, .todo li, .home-post, .sc-wrap, .agent, .gear-card, .team-card, .opt, .ad { border-color: var(--frame); }
+/* the next-game card: a fine inner frame and a gold top edge */
+.matchup { border: 1px solid rgb(255 255 255 / .22); border-top: 3px solid var(--gold); }
+.mu-when { border: 1px solid rgb(15 23 42 / .15); }
+/* status tags get an outline in their own colour */
+.pill { border: 1px solid currentColor; }
+.pill.in { border-color: rgb(47 107 70 / .35); } .pill.maybe { border-color: rgb(146 64 14 / .3); } .pill.out { border-color: rgb(185 28 28 / .3); }
+/* team notice banners: a solid frame and a thick left edge */
+.notice-bar { border: 1px solid rgb(0 0 0 / .18); border-left-width: 6px; }
+.notice { border: 1px solid var(--frame); border-left: 4px solid var(--gold); }
+/* tab bars and the sidebar */
+.subnav { border-color: var(--frame); }
+nav.tabs { border-color: var(--frame); }
+@media (min-width: 900px) { nav.tabs { border-right: 3px solid var(--gold); } }
+/* tables: framed, with a header rule */
+.lineup-scroll, .linescore { border: 1px solid var(--frame); border-radius: 12px; overflow: hidden; }
+thead th { border-bottom: 2px solid var(--frame); }
+/* the sign-in tabs and dialog */
+.auth-tabs { border-color: var(--frame); }
+dialog.menu { border-color: var(--frame); }
+dialog.menu .mhead { border-bottom: 2px solid var(--gold); }
+header.top { position: relative; box-shadow: 0 0 0 100vmax var(--grass); clip-path: inset(0 -100vmax); margin-bottom: 17px; }
+header.top::after { content: ""; position: absolute; left: -100vmax; right: -100vmax; bottom: 0; height: 3px; background: var(--gold); pointer-events: none; }
+.agent .row > .grow { min-width: 12em; }
