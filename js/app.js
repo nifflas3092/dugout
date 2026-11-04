@@ -3,6 +3,7 @@ import { forecast, outlook, CREDIT } from './weather.js';
 import { renderGear, unreadCount, gearBusy } from './market.js';
 import { PLAYS, REACHED, OUTS, POS_NUM, code as playCode, defaultAdvance, applyPlay, defaultRBI, outsOn, pathFor, diamondSVG } from './scorecard.js';
 import { CAPTAIN_PRICE, ADFREE_PRICE } from '../config.js';
+import { icon } from './icons.js';
 import { RULESETS, POS_NAME as RULE_POS_NAME, rulesFor, buildLineupFor, batterAt, lineupPlayers, lineupProblems, availabilityCheck, gameClock } from './rules.js';
 export function startApp(platform) {
 /* ---------- state ---------- */
@@ -205,10 +206,10 @@ function gamedayCard(g, full) {
     <div class="row" style="align-items:flex-start"><span class="gd-tag">${isToday ? 'Gameday' : 'Next game · ' + esc(fmtDate(g.date).w + ' ' + fmtDate(g.date).m + ' ' + fmtDate(g.date).d)}</span>${full ? '' : `<a class="small gd-more" href="#gameday">Open gameday view →</a>`}</div>
     <div class="gd-time">${esc(fmtTime(g.time) || 'Time TBA')}</div>
     <div class="gd-sub">${esc(untilText(g))}${untilText(g) ? ' · ' : ''}${g.home ? 'vs' : '@'} ${esc(g.opp)}</div>
-    <div class="gd-field"><span aria-hidden="true">📍</span><span class="grow"><b>${esc(g.field || 'Field not set')}</b>${(st.diamonds.find(d => d.id === g.diamond) || {}).name ? `<span class="muted small" style="display:block">${esc(st.diamonds.find(d => d.id === g.diamond).name)}</span>` : ''}</span>
+    <div class="gd-field">${icon('pin', 'ic-lg')}<span class="grow"><b>${esc(g.field || 'Field not set')}</b>${(st.diamonds.find(d => d.id === g.diamond) || {}).name ? `<span class="muted small" style="display:block">${esc(st.diamonds.find(d => d.id === g.diamond).name)}</span>` : ''}</span>
       ${maps ? `<a class="btn cta small" href="${esc(maps)}" target="_blank" rel="noopener">Directions</a>` : ''}</div>
     ${wx ? `<div class="wx wx-${wx.level}"><span class="wx-icon" aria-hidden="true">${wx.icon}</span><span class="grow"><b>${esc(wx.temp)}°C</b> · ${esc(wx.text)}</span></div>` : ''}
-    ${av ? `<div class="wx wx-${av.level === 'danger' ? 'high' : 'watch'}"><span class="wx-icon" aria-hidden="true">👥</span><span class="grow">${esc(av.text)}</span></div>` : ''}
+    ${av ? `<div class="wx wx-${av.level === 'danger' ? 'high' : 'watch'}"><span class="wx-icon" aria-hidden="true">${icon('users')}</span><span class="grow">${esc(av.text)}</span></div>` : ''}
     ${me && myRot ? `<div class="gd-you">You bat in the rotating ${myRot === 'w' ? 'women’s' : 'men’s'} spots · ${myPos === 'BN' ? 'start on the <b>bench</b>' : `start at <b>${esc(POS_NAME[myPos])}</b>`}</div>` : ''}
     ${me && !myRot ? (mySpot >= 0 ? `<div class="gd-you">You bat <b>${ordinal(mySpot + 1)}</b> · ${myPos === 'BN' ? 'start on the <b>bench</b>' : `start at <b>${esc(POS_NAME[myPos])}</b>`}</div>`
       : `<div class="gd-you"><span class="grow">Are you playing?</span>${rsvpSeg(g.id, me)}</div>`) : ''}
@@ -274,7 +275,8 @@ async function saveLineupImage(g) {
 }
 
 /* ---------- 4. team notice banner (fields closed, time changed, ...) ---------- */
-const NOTICE_PRESETS = [['danger', '⚠️ GAMES CANCELLED TONIGHT: fields are closed'], ['warn', '🌧️ Fields being checked. Decision by 5 PM, watch for an update'], ['warn', '⏰ Game time changed. Check the schedule'], ['info', '📍 Diamond changed. Check the schedule']];
+const NOTICE_PRESETS = [['danger', 'GAMES CANCELLED TONIGHT: fields are closed'], ['warn', 'Fields being checked. Decision by 5 PM, watch for an update'], ['warn', 'Game time changed. Check the schedule'], ['info', 'Diamond changed. Check the schedule']];
+const noticeIcon = a => icon(a.level === 'info' ? 'info' : a.level === 'danger' ? 'alert' : /rain|field|wet|check/i.test(a.text) ? 'rain' : /time|late|delay/i.test(a.text) ? 'clock' : /diamond|park|moved/i.test(a.text) ? 'pin' : 'alert', 'ic-lg');
 const liveNotice = () => { const a = st.team && st.team.alert; return a && a.text && (!a.until || Date.now() < a.until) ? a : null; };
 function renderNotice() {
   const box = document.getElementById('notice'); if (!box) return;
@@ -283,7 +285,7 @@ function renderNotice() {
   const hidden = LS.get('noticeHidden', 0) === a.at;
   box.hidden = false; box.className = `notice-bar notice-${['danger', 'warn', 'info'].includes(a.level) ? a.level : 'warn'}${hidden ? ' small' : ''}`;
   box.innerHTML = hidden ? `<button type="button" class="notice-toggle" data-nshow>Team notice · show</button>`
-    : `<div class="grow" role="alert"><b>${esc(a.text)}</b><span class="notice-meta">Posted ${esc(new Date(a.at).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }))}${a.until ? ' · clears automatically tonight' : ''}</span></div>
+    : `${noticeIcon(a)}<div class="grow" role="alert"><b>${esc(a.text.replace(/^[\u2190-\u2BFF\u{1F000}-\u{1FAFF}\uFE0F\s]+/u, ''))}</b><span class="notice-meta">Posted ${esc(new Date(a.at).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }))}${a.until ? ' · clears automatically tonight' : ''}</span></div>
       <div class="row" style="gap:6px">${st.canEdit ? `<button type="button" class="notice-btn" data-nshare>Send to chat</button><button type="button" class="notice-btn" data-nclear>Remove</button>` : ''}<button type="button" class="notice-btn" data-nhide aria-label="Hide this notice">Hide</button></div>`;
   const on = (sel, fn) => { const b = box.querySelector(sel); if (b) b.onclick = fn; };
   on('[data-nshow]', () => { LS.set('noticeHidden', 0); renderNotice(); });
@@ -430,7 +432,7 @@ function rainCard(g, d) {
       <div class="grow" style="min-width:0">
         <div class="vs">${g.home ? 'vs' : '@'} ${esc(g.opp)}</div>
         <div class="muted small">${esc(fmtTime(g.time))}${g.field ? ' · ' + esc(g.field) : ''}</div>
-        <div class="row" style="margin-top:6px"><span class="pill rain">🌧️ Rained out</span>${mk ? `<span class="pill in">Makeup ${esc(fmtDate(mk.date).w)} ${esc(fmtDate(mk.date).m)} ${esc(fmtDate(mk.date).d)}${mk.time ? ', ' + esc(fmtTime(mk.time)) : ''}</span>` : '<span class="pill warn">Needs a makeup</span>'}</div>
+        <div class="row" style="margin-top:6px"><span class="pill rain">${icon('rain')} Rained out</span>${mk ? `<span class="pill in">Makeup ${esc(fmtDate(mk.date).w)} ${esc(fmtDate(mk.date).m)} ${esc(fmtDate(mk.date).d)}${mk.time ? ', ' + esc(fmtTime(mk.time)) : ''}</span>` : '<span class="pill warn">Needs a makeup</span>'}</div>
       </div>
     </div>
     ${st.canEdit ? `<div class="row"><button class="btn cta small" type="button" data-tell="${esc(g.id)}">Tell the team</button>${mk ? '' : `<button class="btn small" type="button" data-makeup="${esc(g.id)}">Schedule makeup</button>`}<button class="btn ghost small" type="button" data-unrain="${esc(g.id)}">Not rained out</button><button class="btn danger small" type="button" data-delgame="${esc(g.id)}">Delete</button></div>` : ''}
@@ -632,7 +634,7 @@ function renderScore() {
   ${keep ? `<div class="panel" style="margin-top:12px">
     ${field}
     ${rules.coed || rules.runCap ? `<div class="rule-notes small">
-      ${clock ? `<span class="${clock.pastLastNew ? 'hot' : ''}">⏱ ${clock.pastLastNew ? `<b>Past ${esc(hhmm(clock.lastNew))}: don’t start a new inning</b>` : `No new inning after ${esc(hhmm(clock.lastNew))}`} · ends ${esc(hhmm(clock.end))}</span>` : ''}
+      ${clock ? `<span class="${clock.pastLastNew ? 'hot' : ''}">${icon('timer')} ${clock.pastLastNew ? `<b>Past ${esc(hhmm(clock.lastNew))}: don’t start a new inning</b>` : `No new inning after ${esc(hhmm(clock.lastNew))}`} · ends ${esc(hhmm(clock.end))}</span>` : ''}
       ${cap ? `<span>Run limit ${cap} an inning: ${usInn}/${cap} this inning</span>` : rules.runCap ? '<span>Last inning: no run limit</span>' : ''}
       ${rules.pitches ? `<span>${rules.pitches} pitches per batter</span>` : ''}
       ${rules.offensePitcher && g.lineup && g.lineup.pitcher ? `<span>Pitching for us: <b>${esc(pName(g.lineup.pitcher))}</b></span>` : ''}

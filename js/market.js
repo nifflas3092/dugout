@@ -1,6 +1,8 @@
 /* Gear: a used-equipment marketplace for the league. Listings with photos, filters, and private buyer–seller messages.
    Money changes hands in person; Dugout never handles payments. */
 
+import { icon } from './icons.js';
+
 export const CATS = [['bat', 'Bats'], ['glove', 'Gloves'], ['cleats', 'Cleats'], ['helmet', 'Helmets & face masks'], ['bag', 'Bags'], ['balls', 'Balls'],
   ['catcher', 'Catcher’s gear'], ['apparel', 'Apparel'], ['training', 'Training gear'], ['other', 'Other']];
 export const CONDS = [['new', 'New'], ['likenew', 'Like new'], ['good', 'Good'], ['fair', 'Fair'], ['worn', 'Well used']];
@@ -81,7 +83,7 @@ function card(c, l, d) {
   </a>`;
 }
 const price = p => (+p ? '$' + (+p).toLocaleString() : 'Free');
-const catIcon = k => ({ bat: '🏏', glove: '🧤', cleats: '👟', helmet: '⛑️', bag: '🎒', balls: '🥎', apparel: '👕' }[k] || '🥎');
+const catIcon = k => icon({ bat: 'bat', glove: 'glove', cleats: 'cleats', helmet: 'helmet', bag: 'bag', balls: 'ball', catcher: 'catcher', apparel: 'apparel', training: 'training' }[k] || 'tag');
 
 /* ---------- one listing ---------- */
 function item(c) {

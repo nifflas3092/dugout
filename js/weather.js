@@ -2,6 +2,7 @@
    Free for commercial use under CC BY 4.0 as long as they're credited; forecasts cover the next ~9 days.
    We only ever send a location rounded to about 1 km, and we keep each forecast until MET says it's stale. */
 
+import { icon as ic } from './icons.js';
 const cache = new Map();          // "43.65,-79.51" -> { exp, series } | { promise }
 const LSKEY = 'dugout-wx-';
 const MIN_KEEP = 30 * 60 * 1000;  // never re-ask more often than every 30 minutes
@@ -74,12 +75,8 @@ export function outlook(series, date, time) {
 }
 
 function icon(sym = '') {
-  if (/thunder/.test(sym)) return '⛈️';
-  if (/snow|sleet/.test(sym)) return '🌨️';
-  if (/rain/.test(sym)) return '🌧️';
-  if (/fog/.test(sym)) return '🌫️';
-  if (/partlycloudy|fair/.test(sym)) return /night/.test(sym) ? '☁️' : '⛅';
-  if (/cloudy/.test(sym)) return '☁️';
-  if (/clearsky/.test(sym)) return /night/.test(sym) ? '🌙' : '☀️';
-  return '🌡️';
+  const night = /night/.test(sym);
+  const n = /thunder/.test(sym) ? 'storm' : /snow|sleet/.test(sym) ? 'snow' : /rain/.test(sym) ? 'rain' : /fog/.test(sym) ? 'fog'
+    : /partlycloudy|fair/.test(sym) ? (night ? 'cloud' : 'partly') : /cloudy/.test(sym) ? 'cloud' : /clearsky/.test(sym) ? (night ? 'moon' : 'sun') : 'thermo';
+  return ic(n);
 }

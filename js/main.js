@@ -4,6 +4,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, CAPTAIN_PRICE, ADFREE_PRICE } from '..
 import { createPlatform } from './platform.js';
 import { startApp } from './app.js';
 import { prefsForm, bindPrefs } from './prefs.js';
+import { icon } from './icons.js';
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const LS = { get(k) { try { return localStorage.getItem('dugout-' + k); } catch (_) { return null; } }, set(k, v) { try { v == null ? localStorage.removeItem('dugout-' + k) : localStorage.setItem('dugout-' + k, v); } catch (_) {} } };
@@ -13,7 +14,7 @@ const crest = '<div class="crest" aria-hidden="true">D</div>';
 const footer = '<footer><button type="button" class="linkish" data-showprefs>Display &amp; accessibility</button> · <a href="privacy.html">Privacy</a></footer>';
 // errors raised by the database's own checks are written for people; anything else gets a generic line
 const friendly = (error, fallback) => (error && error.code === 'P0001' && error.message && error.message.length < 140 ? error.message : fallback);
-const eye = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const eye = icon('eye');
 
 function showGate(html) {
   appEl.hidden = true; gate.hidden = false;
@@ -260,7 +261,7 @@ async function openTeam(session, account, team, teams) {
   platform.openMenu = section => teamMenu(session, account, team, teams, prof?.display_name || '', section);
   gate.hidden = true; appEl.hidden = false;
   const tools = appEl.querySelector('.tools');
-  const mb = document.createElement('button'); mb.className = 'chip-btn'; mb.type = 'button'; mb.textContent = 'Menu'; mb.setAttribute('aria-haspopup', 'dialog');
+  const mb = document.createElement('button'); mb.className = 'chip-btn'; mb.type = 'button'; mb.innerHTML = icon('menu') + '<span>Menu</span>'; mb.setAttribute('aria-haspopup', 'dialog');
   tools.prepend(mb); mb.onclick = () => platform.openMenu();
   if (paidReturn === 'captain' && account.captain) setTimeout(() => platform.toast && platform.toast('You’re a captain now. Thanks!'), 400);
   if (paidReturn === 'adfree' && account.adFree) setTimeout(() => platform.toast && platform.toast('Ads are gone for good. Thanks!'), 400);
