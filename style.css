@@ -622,3 +622,34 @@ nav.tabs .tabs-side a.tab-play { color: var(--clay); font-weight: 700; }
 h1, h2, h3, .vs, .mu-vs { letter-spacing: -0.01em; }
 label { font-weight: 600; }
 input, select, textarea { font-weight: 400; }
+
+/* ---------- polish: same layout and colours, quieter details ----------
+   thinner borders, softer corners, soft shadows instead of hard "pressed" ledges */
+:root { --r-card: 14px; --r-btn: 10px; --edge: 1px; --shadow-sm: 0 1px 2px rgb(15 23 42 / .06); --shadow-md: 0 1px 3px rgb(15 23 42 / .08), 0 4px 12px rgb(15 23 42 / .05); }
+.panel, .tile, .todo li, .home-post, .sc-wrap, .agent, .gear-card, .team-card { border-width: 1px; box-shadow: var(--shadow-sm); }
+.tile, .todo li, .home-post, .sc-wrap, .play-sheet { border-radius: var(--r-card); }
+.btn { box-shadow: var(--shadow-sm); transition: background-color .12s ease, box-shadow .12s ease, transform .06s ease; }
+.btn:hover:not(:disabled) { box-shadow: var(--shadow-md); }
+.btn:active:not(:disabled) { transform: translateY(1px); box-shadow: none; }
+.btn.cta, .btn.cta:active:not(:disabled) { box-shadow: var(--shadow-sm); }
+.btn.ghost { border-width: 1px; box-shadow: var(--shadow-sm); }
+.btn.danger { border-width: 1px; box-shadow: none; }
+.btn.ghost-light { box-shadow: none; border: 1px solid rgb(255 255 255 / .25); }
+.iconbtn, .seg { border-width: 1px; box-shadow: none; }
+.chip-btn { border-width: 1px; }
+input[type=text], input[type=email], input[type=password], input[type=url], input[type=search], input[type=date], input[type=time], input[type=number], select, textarea { border-width: 1px; border-radius: var(--r-btn); background: var(--surface); }
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--grass); outline-offset: 1px; border-color: var(--grass); }
+.matchup { border-radius: 18px; box-shadow: 0 10px 28px rgb(47 107 70 / .22); }
+.mu-btn { box-shadow: 0 1px 2px rgb(0 0 0 / .15); }
+.mu-btn:active { transform: translateY(1px); box-shadow: none; }
+.mu-when { font-size: 13px; padding: 5px 10px; }
+nav.tabs { border-width: 1px; border-radius: 18px; }
+dialog.menu { border-radius: 14px; box-shadow: 0 20px 50px rgb(15 23 42 / .25); }
+.opt { border-width: 1px; }
+h2 { letter-spacing: -0.015em; }
+.muted { color: var(--muted); }
+@media (min-width: 900px) { nav.tabs { border-radius: 0; } }
+:where(a:not(.btn)) { color: var(--grass-deep); text-underline-offset: 2px; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) :where(a:not(.btn)) { color: #7dd3a0; } }
+:root[data-theme="dark"] :where(a:not(.btn)) { color: #7dd3a0; }
+@media (min-width: 900px) { .wrap { padding-top: 0; } }
