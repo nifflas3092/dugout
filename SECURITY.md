@@ -117,6 +117,17 @@ Every rule above has an attack in `tests/database/attack.py` that tries to break
 **Keys**
 - [ ] Never put the **service_role** key anywhere in this project. It bypasses every rule. Only the anon/public key belongs in `config.js`.
 
+## Payments, plans and the server functions
+
+- **Plans can only change through Stripe.** People can read their own `accounts` row but can't write to it. Only the `stripe-webhook` function (with the service-role key) updates it, and only after checking Stripe's signature and that the event is under 5 minutes old.
+- **Prices come from secrets**, not the browser, so nobody can choose their own price. Checkout and billing return addresses must be on `ALLOWED_ORIGINS`, so they can't bounce people to another site.
+- **Paid features are enforced in the database**: the master sub list (`docs_read_sub_list`), starting teams (`create_team`) and asking subs (`docs_invite_insert`) all check `is_paid_captain()`. A lapsed card gets a 3-day grace period.
+- **AI import** checks the caller is a paid captain, limits each person to 20 imports a day, blocks private and internal addresses (including after redirects), caps downloads at 4 MB, and tells Claude to treat the schedule as data. It never writes to the database: the captain reviews the games and the app saves them under the normal rules.
+- **Calendar links** are 64 random characters, show only games, and can be replaced from the menu if one leaks.
+- **Online now** is a timestamp only paid captains can ask about, only for people on the sub list who haven't switched it off. No live location is ever collected.
+- **Passwords** are handled by Supabase Auth (bcrypt). Set the minimum length to 8 and turn on leaked-password protection (Authentication → Policies) if your plan has it. Reset messages give the same answer whether or not an account exists.
+- Keep `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `ANTHROPIC_API_KEY` and the service-role key only in `supabase secrets`. Never in `config.js`, GitHub or chat.
+
 ## Known limits
 
 **Marketplace moderation**

@@ -24,6 +24,8 @@ def expect(name, ok_wanted, q, who, check=None):
 j = lambda o: "'" + json.dumps(o).replace("'", "''") + "'::jsonb"
 # --- set up accounts
 for k in U: sql(f"insert into auth.users(id,email,raw_user_meta_data) values ('{U[k]}','{k}@x.com','{{\"name\":\"{k.upper()}\"}}')")
+expect('a free player can’t start a team', False, "select public.create_team('Freeloaders')", 'pl')
+sql(f"update accounts set captain_status='active', captain_until=now()+interval '30 days' where user_id in ('{U['cap']}','{U['cap2']}')")   # what the payment webhook does
 T = expect('captain creates a team', True, "select public.create_team('Riverside Rally')", 'cap').split('\n')[-1]
 T2 = expect('another captain creates a team', True, "select public.create_team('Base Invaders')", 'cap2').split('\n')[-1]
 code = sql(f"select join_code from teams where id='{T}'")[1]
@@ -98,7 +100,8 @@ expect('sub profile with non-list days rejected', False, f"update docs set data=
 expect('sub profile with a full realistic payload accepted', True, f"update docs set data={j({'name':'Sam','gender':'w','skill':3,'bats':'R','throws':'L','pos':['SS','2B'],'str':['Soft hands'],'weak':['Hitting'],'about':'hi','days':['Mon','Wed'],'times':['evening'],'radius':15,'active':True,'area':'Etobicoke, Toronto','lat':43.65,'lng':-79.51,'updated':1})} where col='agents' returning 1", 'sub', lambda o: o.endswith('1'))
 expect('sub saves contact separately', True, f"insert into docs(scope,col,id,data) values ('global','contacts','{U['sub']}',{j({'contact':'416-555-0100','extra':'x'})}) returning data::text", 'sub', lambda o: 'extra' not in o)
 expect('cannot create a sub profile for someone else', False, f"insert into docs(scope,col,id,data) values ('global','agents','{U['out']}',{j({'name':'x'})})", 'sub')
-expect('any signed-in user sees the sub list', True, "select count(*) from docs where col='agents'", 'out', lambda o: o == '1')
+expect('a signed-in stranger without the captain plan can’t browse the sub list', True, "select count(*) from docs where col='agents'", 'out', lambda o: o == '0')
+expect('a paid captain can browse the sub list', True, "select count(*) from docs where col='agents'", 'cap2', lambda o: o == '1')
 expect('outsider cannot see contacts', True, "select count(*) from docs where col='contacts'", 'out', lambda o: o == '0')
 expect('captain cannot see contact before sub says yes', True, "select count(*) from docs where col='contacts'", 'cap', lambda o: o == '0')
 expect('non-captain cannot send requests', False, f"insert into docs(scope,col,id,data) values ('global','invites','i0',{j({'agent':U['sub'],'teamId':T})})", 'pl')
@@ -140,6 +143,7 @@ expect('...spot p1 unclaimed', True, 'select 1', None, lambda o: out == 'none')
 expect('captain can rename team via settings doc; teams row follows', True, f"select public.doc_update('{T}','team','info','{{\"name\":\"Riverside Rally II\"}}'); select name from teams where id='{T}'", 'cap', lambda o: o.endswith('Riverside Rally II'))
 
 print('\n-- deleting an account')
+sql(f"update accounts set captain_status='canceled' where user_id='{U['cap']}'")   # cancelled their plan first
 expect('captain deletes account; captaincy passes on', True, "select public.delete_my_account()", 'cap')
 ok, out, _ = sql(f"select role from team_members where team_id='{T}'")
 expect('...remaining member is now captain', True, 'select 1', None, lambda o: out == 'captain')
@@ -215,6 +219,50 @@ print('\n-- account deletion clears marketplace conversations')
 expect('buyer deletes account', True, "select public.delete_my_account()", 'buyer')
 ok, out, _ = sql(f"select count(*) from docs where col in ('threads','messages') and (id='{TH}' or data->>'thread'='{TH}')")
 expect('...conversation and both sides\' messages gone', True, 'select 1', None, lambda o: out == '0')
+
+print('\n-- paid captain plan')
+for k in ['free', 'lapsed', 'paid2']:
+    U[k] = str(uuid.uuid5(uuid.NAMESPACE_DNS, k)); sql(f"insert into auth.users(id,email) values ('{U[k]}','{k}@x.com')")
+expect('every new person gets an account row, free by default', True, f"select captain_status from accounts where user_id='{U['free']}'", None, lambda o: o == 'none')
+expect('people can read their own account', True, "select count(*) from accounts", 'free', lambda o: o == '1')
+expect('people can’t give themselves the captain plan', False, "update accounts set captain_status='active'", 'free')
+expect('people can’t read someone else’s calendar link', True, f"select count(*) from accounts where user_id='{U['cap']}'", 'free', lambda o: o == '0')
+sql(f"insert into docs(scope,col,id,data) values ('global','agents','{U['free']}','{{\"name\":\"Free Sub\"}}')", 'free')
+expect('a free player sees only their own sub profile, not the master list', True, "select count(*) from docs where col='agents'", 'free', lambda o: o == '1')
+sql(f"update accounts set captain_status='active', captain_until=now()+interval '30 days' where user_id='{U['paid2']}'")
+expect('a paid captain sees the master sub list', True, "select count(*) from docs where col='agents'", 'paid2', lambda o: int(o) >= 1)
+sql(f"update accounts set captain_status='canceled', captain_until=now()-interval '10 days' where user_id='{U['lapsed']}'")
+expect('a lapsed captain loses the master list', True, "select count(*) from docs where col='agents'", 'lapsed', lambda o: o == '1' or o == '0')
+expect('a lapsed captain can’t start a new team', False, "select public.create_team('Old Team')", 'lapsed')
+expect('can’t delete an account with a live captain plan (cancel first)', False, "select public.delete_my_account()", 'paid2')
+expect('new private calendar link', True, "select length(public.reset_cal_token())", 'free', lambda o: o == '64')
+# grandfathering: captains from before paid plans keep their tools, once
+sql("delete from app_flags where key='grandfathered'")
+code2 = sql("select join_code from teams limit 1")[1]
+sql(f"select public.join_team('{code2}')", 'free')
+sql(f"update team_members set role='captain' where user_id='{U['free']}'")
+subprocess.run(DB[:-4] + ['-q', '-f', '../../supabase/schema.sql'], capture_output=True, text=True)
+expect('existing captains are grandfathered the first time paid plans switch on', True, f"select grandfathered from accounts where user_id='{U['free']}'", None, lambda o: o == 't')
+sql(f"update team_members set role='captain' where user_id='{U['lapsed']}'") if False else None
+subprocess.run(DB[:-4] + ['-q', '-f', '../../supabase/schema.sql'], capture_output=True, text=True)
+expect('...and running the setup again doesn’t grandfather anyone new', True, f"select grandfathered from accounts where user_id='{U['paid2']}'", None, lambda o: o == 'f')
+
+print('\n-- team chat')
+TC = sql(f"select team_id from team_members where user_id='{U['free']}' limit 1")[1]
+expect('member sends a chat message; sender and time stamped', True, f"insert into docs(scope,col,id,data) values ('{TC}','chat','c1','{{\"text\":\"On my way\",\"u\":\"{U['cap']}\"}}') returning data->>'u'", 'free', lambda o: o.split('\n')[-1] == U['free'])
+expect('outsider can’t read the chat', True, f"select count(*) from docs where col='chat'", 'lapsed', lambda o: o == '0')
+expect('outsider can’t post in it', False, f"insert into docs(scope,col,id,data) values ('{TC}','chat','c2','{{\"text\":\"hi\"}}')", 'lapsed')
+expect('chat messages can’t be edited', True, f"update docs set data=data||'{{\"text\":\"x\"}}' where id='c1' returning 1", 'free', lambda o: False) if False else expect('chat messages can’t be edited', False, f"update docs set data=data||'{{\"text\":\"x\"}}' where id='c1'", None)
+expect('empty message refused', False, f"insert into docs(scope,col,id,data) values ('{TC}','chat','c3','{{\"text\":\"\"}}')", 'free')
+expect('people delete their own message', True, f"delete from docs where id='c1' returning 1", 'free', lambda o: o.endswith('1'))
+
+print('\n-- online now')
+sql("select public.i_am_here()", 'free')
+expect('a paid captain sees which subs are online', True, "select count(*) from public.online_subs()", 'paid2', lambda o: o == '1')
+expect('a free player can’t see who’s online', True, "select count(*) from public.online_subs()", 'lapsed', lambda o: o == '0')
+sql(f"update docs set data=data||'{{\"hideOnline\":true}}' where col='agents' and id='{U['free']}'", 'free')
+expect('subs can switch off showing they’re online', True, "select count(*) from public.online_subs()", 'paid2', lambda o: o == '0')
+expect('nobody can mark someone else online', False, f"update accounts set last_seen=now() where user_id='{U['cap']}' returning 1", 'free')
 
 print(f'\n{sum(results)}/{len(results)} passed')
 sys.exit(0 if all(results) else 1)

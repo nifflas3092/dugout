@@ -1,21 +1,23 @@
 // In-browser stand-in for @supabase/supabase-js, for testing the Dugout app without a real backend.
 // State lives in localStorage so several pages (users) in one browser context share it, like a server.
 const K = 'fake-sb-db';
-const load = () => JSON.parse(localStorage.getItem(K) || '{"profiles":[],"teams":[],"team_members":[],"docs":[]}');
+const load = () => { const d = JSON.parse(localStorage.getItem(K) || '{"profiles":[],"teams":[],"team_members":[],"docs":[]}'); d.accounts = d.accounts || []; d.users = d.users || []; d.seen = d.seen || {}; return d; };
+const acct = (d, id) => { let a = d.accounts.find(x => x.user_id === id); if (!a) { a = { user_id: id, captain_status: 'none', captain_until: null, grandfathered: false, ad_free: false, cal_token: 'c'.repeat(64) }; d.accounts.push(a); } return a; };
+const paid = (d, id) => { const a = acct(d, id); return a.grandfathered || ['active', 'trialing'].includes(a.captain_status); };
 const save = d => { localStorage.setItem(K, JSON.stringify(d)); bc.postMessage('x'); };
 const bc = new BroadcastChannel('fake-sb');
 const listeners = new Set();
 bc.onmessage = () => listeners.forEach(f => f());
 let n = 0; const rid = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 const ME = () => window.__fakeUser || JSON.parse(sessionStorage.getItem('fakeUser') || 'null'); // { id, email, name }
-const pk = { profiles: ['id'], teams: ['id'], team_members: ['team_id', 'user_id'], docs: ['scope', 'col', 'id'] };
+const pk = { accounts: ['user_id'], profiles: ['id'], teams: ['id'], team_members: ['team_id', 'user_id'], docs: ['scope', 'col', 'id'] };
 const isMember = (d, t) => d.team_members.some(m => m.team_id === t && m.user_id === ME()?.id);
 const isCap = (d, t) => d.team_members.some(m => m.team_id === t && m.user_id === ME()?.id && m.role === 'captain');
 function canWriteDoc(d, r, old) {
   if (r.scope !== 'global') {
     if (isCap(d, r.scope)) return true;
     if (r.col === 'rsvp') return isMember(d, r.scope) && d.docs.some(p => p.scope === r.scope && p.col === 'players' && p.id === r.data.p && p.data.uid === ME().id);
-    if (r.col === 'posts') return isMember(d, r.scope) && !old;
+    if (r.col === 'posts' || r.col === 'chat') return isMember(d, r.scope) && !old;
     return false;
   }
   if (r.col === 'agents' || r.col === 'contacts') return r.id === ME().id;
@@ -34,10 +36,12 @@ function canRead(d, table, r) {
     if (r.col === 'threads') return r.data.buyer === ME().id || r.data.seller === ME().id;
     if (r.col === 'messages') { const t = d.docs.find(x => x.col === 'threads' && x.id === r.data.thread); return t && (t.data.buyer === ME().id || t.data.seller === ME().id); }
     if (r.col === 'reports') return false;
+    if (r.col === 'agents') return r.id === ME().id || paid(d, ME().id);
     return r.scope === 'global' || isMember(d, r.scope);
   }
   if (table === 'teams') return isMember(d, r.id);
   if (table === 'team_members') return isMember(d, r.team_id);
+  if (table === 'accounts') return r.user_id === ME()?.id;
   return true;
 }
 const denied = () => ({ data: null, error: { code: '42501', message: 'new row violates row-level security policy' } });
@@ -54,7 +58,7 @@ class Q {
   order() { return this; }
   then(res, rej) { return Promise.resolve().then(() => this.run()).then(res, rej); }
   run() {
-    const d = load(), rows = d[this.t]; const hit = r => this.f.every(f => f(r));
+    const d = load(); if (this.t === 'accounts' && ME()) acct(d, ME().id); const rows = d[this.t]; const hit = r => this.f.every(f => f(r));
     if (this.op === 'select') {
       let out = rows.filter(r => hit(r) && canRead(d, this.t, r));
       if (this.t === 'team_members') out = out.map(m => ({ ...m, teams: d.teams.find(t => t.id === m.team_id), profiles: { display_name: d.profiles.find(p => p.id === m.user_id)?.display_name } }));
@@ -64,7 +68,8 @@ class Q {
       const r = { ...this.row }; const old = rows.find(x => pk[this.t].every(k => x[k] === r[k]));
       if (this.t === 'docs') { if (!canWriteDoc(d, r, old)) return denied(); r.owner = old ? old.owner : ME().id;
         if (r.col === 'players' && old) r.data = { ...r.data, uid: old.data.uid }; if (r.col === 'players' && !old) delete r.data.uid;
-        if (r.col === 'posts') r.data.u = r.owner;
+        if (r.col === 'posts' || r.col === 'chat') r.data.u = r.owner;
+        if (r.col === 'chat') { if (!String(r.data.text || '').trim()) return { data: null, error: { code: 'P0001', message: 'Messages are 1 to 1000 characters' } }; r.data.at = Date.now(); }
         if (r.col === 'listings') r.data.seller = r.owner;
         if (r.col === 'threads' && !old) { const l = d.docs.find(x => x.col === 'listings' && x.id === r.data.listing); if (!l || l.owner === ME().id) return { data: null, error: { code: 'P0001', message: 'That’s your own listing' } }; r.data = { listing: l.id, buyer: ME().id, seller: l.owner, title: l.data.title, at: Date.now() }; }
         if (r.col === 'messages') { r.data = { thread: r.data.thread, text: r.data.text, from: ME().id, at: Date.now() }; const t = d.docs.find(x => x.col === 'threads' && x.id === r.data.thread); Object.assign(t.data, { last: r.data.text, lastAt: r.data.at, lastFrom: ME().id, [t.data.buyer === ME().id ? 'seenBuyer' : 'seenSeller']: r.data.at }); }
@@ -72,7 +77,7 @@ class Q {
       if (old) Object.assign(old, r); else rows.push(r); save(d); return { data: this.single ? { data: r.data } : null, error: null };
     }
     const targets = rows.filter(hit);
-    if (this.t === 'docs' && targets.some(r => !(canWriteDoc(d, r, r) || (this.op === 'delete' && r.col === 'posts' && r.owner === ME().id)))) return denied();
+    if (this.t === 'docs' && targets.some(r => !(canWriteDoc(d, r, r) || (this.op === 'delete' && (r.col === 'posts' || r.col === 'chat') && r.owner === ME().id)))) return denied();
     if (this.t === 'team_members' && targets.some(r => !(isCap(d, r.team_id) || (this.op === 'delete' && r.user_id === ME().id)))) return denied();
     if (this.op === 'update') targets.forEach(r => Object.assign(r, this.patch));
     else d[this.t] = rows.filter(r => !targets.includes(r));
@@ -85,13 +90,37 @@ function createClient() {
     auth: {
       onAuthStateChange(fn) { authSubs.push(fn); return { data: { subscription: { unsubscribe() {} } } }; },
       async getSession() { const u = ME(); if (u) { const d = load(); if (!d.profiles.find(p => p.id === u.id)) { d.profiles.push({ id: u.id, display_name: u.name }); save(d); } } return { data: { session: u ? { user: u } : null } }; },
+      async signUp({ email, password, options }) { const d = load(); if (d.users.some(u => u.email === email)) return { data: {}, error: { message: 'User already registered' } };
+        const u = { id: 'u-' + email.split('@')[0], email, name: options?.data?.name || '', pw: password }; d.users.push(u); acct(d, u.id); save(d); window.__signedUp = u;
+        if (window.__confirmEmail) return { data: { user: u, session: null }, error: null };
+        return this._in(u); },
+      async _in(u) { const me = { id: u.id, email: u.email, name: u.name }; window.__fakeUser = me; sessionStorage.setItem('fakeUser', JSON.stringify(me)); const s = await this.getSession(); authSubs.forEach(f => f('SIGNED_IN', s.data.session)); return { data: { user: me, session: s.data.session }, error: null }; },
+      async signInWithPassword({ email, password }) { const u = load().users.find(x => x.email === email); if (!u || u.pw !== password) return { data: {}, error: { message: 'Invalid login credentials' } }; return this._in(u); },
+      async resetPasswordForEmail(email) { window.__reset = email; return { data: {}, error: null }; },
+      async resend() { return { data: {}, error: null }; },
+      async updateUser({ password }) { const d = load(), u = d.users.find(x => x.id === ME().id); if (u && u.pw === password) return { error: { message: 'New password should be different from the old password.' } }; if (u) u.pw = password; save(d); return { data: {}, error: null }; },
       async signInWithOtp(o) { window.__otp = o; return { error: null }; },
       async verifyOtp(o) { if (o.token !== '123456') return { error: { message: 'Token has expired or is invalid' } }; window.__fakeUser = window.__pendingUser; sessionStorage.setItem('fakeUser', JSON.stringify(window.__pendingUser)); const s = await this.getSession(); authSubs.forEach(f => f('SIGNED_IN', s.data.session)); return { error: null }; },
-      async signOut() { window.__fakeUser = null; sessionStorage.removeItem('fakeUser'); authSubs.forEach(f => f('SIGNED_OUT', null)); return { error: null }; },
+      async signOut(o) { window.__signOutScope = o && o.scope; window.__fakeUser = null; sessionStorage.removeItem('fakeUser'); authSubs.forEach(f => f('SIGNED_OUT', null)); return { error: null }; },
     },
     from: t => new Q(t),
+    // server functions: checkout pays instantly; the schedule reader returns a canned schedule
+    functions: { async invoke(name, { body }) {
+      const d = load(), a = acct(d, ME().id); window.__invoked = (window.__invoked || []).concat(name);
+      if (name === 'create-checkout') { if (body.product === 'captain') a.captain_status = 'active'; else a.ad_free = true; save(d); return { data: { url: body.return_url + '?paid=' + body.product }, error: null }; }
+      if (name === 'billing-portal') return { data: { url: body.return_url }, error: null };
+      if (name === 'import-schedule') { if (!paid(d, ME().id)) return { data: null, error: { context: { json: async () => ({ error: 'Schedule import is a captain feature.' }) } } };
+        return { data: { league: 'Tuesday Co-ed C', teams: ['Riverside Rally', 'Pitch Slaps', 'Bunts'], games: [
+          { date: '2026-11-24', time: '19:30', opp: 'Pitch Slaps', home: true, diamond: 'Hampton Park D2', park: 'Hampton Park', address: '' },
+          { date: '2026-12-01', time: '18:30', opp: 'Bunts', home: false, diamond: 'Etobicoke Park', park: 'Etobicoke Park', address: '' }] }, error: null }; }
+      return { data: null, error: { message: 'no such function' } };
+    } },
     async rpc(name, a) {
       const d = load();
+      if (name === 'create_team' && !paid(d, ME().id)) return { data: null, error: { code: 'P0001', message: 'Starting a team is a captain feature. Upgrade to captain first.' } };
+      if (name === 'i_am_here') { d.seen[ME().id] = Date.now(); save(d); return { data: null, error: null }; }
+      if (name === 'online_subs') return { data: paid(d, ME().id) ? d.docs.filter(x => x.col === 'agents' && !x.data.hideOnline && Date.now() - (d.seen[x.id] || 0) < 180000).map(x => x.id) : [], error: null };
+      if (name === 'reset_cal_token') { const t = 'd'.repeat(64); acct(d, ME().id).cal_token = t; save(d); return { data: t, error: null }; }
       if (name === 'create_team') { const id = 't' + rid(); d.teams.push({ id, name: a.team_name, join_code: rid(), created_by: ME().id }); d.team_members.push({ team_id: id, user_id: ME().id, role: 'captain' }); d.docs.push({ scope: id, col: 'team', id: 'info', owner: ME().id, data: { name: a.team_name, league: '', season: '', fee: 0, innings: 7 } }); save(d); return { data: id, error: null }; }
       if (name === 'join_team') { const t = d.teams.find(t => t.join_code === a.code.trim().toUpperCase()); if (!t) return { data: null, error: { message: 'No team has that code' } }; if (!isMember(d, t.id)) d.team_members.push({ team_id: t.id, user_id: ME().id, role: 'player' }); save(d); return { data: t.id, error: null }; }
       if (name === 'claim_player' || name === 'unclaim_player') { const p = d.docs.find(x => x.scope === a.p_team && x.col === 'players' && x.id === a.p_player); if (!p) return { error: { code: 'P0001', message: 'No such player' } }; if (name === 'claim_player') { if (p.data.uid && p.data.uid !== ME().id) return { error: { code: 'P0001', message: 'Someone else already picked that name. Ask your captain.' } }; d.docs.filter(x => x.scope === a.p_team && x.col === 'players' && x.data.uid === ME().id).forEach(x => delete x.data.uid); p.data.uid = ME().id; } else delete p.data.uid; save(d); return { data: null, error: null }; }

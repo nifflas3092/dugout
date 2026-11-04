@@ -2,6 +2,7 @@
 import { forecast, outlook, CREDIT } from './weather.js';
 import { renderGear, unreadCount, gearBusy } from './market.js';
 import { PLAYS, REACHED, OUTS, POS_NUM, code as playCode, defaultAdvance, applyPlay, defaultRBI, outsOn, pathFor, diamondSVG } from './scorecard.js';
+import { CAPTAIN_PRICE, ADFREE_PRICE } from '../config.js';
 import { RULESETS, POS_NAME as RULE_POS_NAME, rulesFor, buildLineupFor, batterAt, lineupPlayers, lineupProblems, availabilityCheck, gameClock } from './rules.js';
 export function startApp(platform) {
 /* ---------- state ---------- */
@@ -11,7 +12,7 @@ const RULES = () => rulesFor(st.team);          // the team's league rules (Team
 const FPOS = () => RULES().pos;                // fielding positions under those rules
 const GENDER = { m: 'Man', w: 'Woman', x: 'Non-binary' };
 const slotLabel = (L, slot) => slot && slot[0] === '~' ? `${slot[1] === 'w' ? 'Women' : 'Men'}’s spot ↻ (${((L.rot || {})[slot[1]] || []).map(pName).join(', ')})` : pName(slot);
-const st = { listings: [], threads: [], messages: [], contacts: {}, agents: [], diamonds: [], invites: [], team: null, players: [], games: [], rsvp: {}, ab: [], posts: [], loaded: { team: false, players: false, games: false }, canEdit: false, canWrite: false, offline: false };
+const st = { listings: [], threads: [], messages: [], contacts: {}, agents: [], diamonds: [], invites: [], team: null, players: [], games: [], rsvp: {}, ab: [], posts: [], chat: [], online: new Set(), loaded: { team: false, players: false, games: false }, canEdit: false, canWrite: false, offline: false };
 let db = null, user = null;
 const view = document.getElementById('view');
 const LS = { get(k, d) { try { const v = localStorage.getItem('dugout-' + k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } }, set(k, v) { try { localStorage.setItem('dugout-' + k, JSON.stringify(v)); } catch (_) {} } };
@@ -22,6 +23,10 @@ const openLists = new Set();              // RSVP lists the viewer has opened, k
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const toast = msg => { const t = document.getElementById('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => t.hidden = true, 2200); };
+platform.toast = toast;
+const ACCT = platform.account || {};
+const PAID = !!ACCT.captain;              // paid (or grandfathered) captain: full sub list, schedule import, no ads
+const ADFREE = !!ACCT.adFree;
 const uid = () => Math.random().toString(36).slice(2, 10);
 const pName = id => { const p = st.players.find(x => x.id === id); return p ? p.name : 'Former player'; };
 const pNum = id => { const p = st.players.find(x => x.id === id); return p && p.number !== '' && p.number != null ? '#' + p.number : ''; };
@@ -42,11 +47,12 @@ async function write(fn, ok) {
 
 /* ---------- views ---------- */
 /* navigation: five groups, in the order a team uses them */
-const GROUP = { home: 'home', gameday: 'home', schedule: 'games', lineup: 'games', score: 'games', roster: 'team', stats: 'team', board: 'team', subs: 'subs', gear: 'gear' };
-const SUBNAV = { games: [['schedule', 'Schedule'], ['lineup', 'Lineup'], ['score', 'Score']], team: [['roster', 'Roster'], ['stats', 'Stats'], ['board', 'Board']] };
+const GROUP = { home: 'home', gameday: 'home', schedule: 'games', lineup: 'games', score: 'games', roster: 'team', stats: 'team', chat: 'team', board: 'team', subs: 'league', diamonds: 'league', gear: 'gear' };
+const SUBNAV = { games: [['schedule', 'Schedule'], ['lineup', 'Lineup'], ['score', 'Score']], team: [['roster', 'Roster'], ['chat', 'Chat'], ['stats', 'Stats'], ['board', 'Board']], league: [['subs', 'Subs'], ['diamonds', 'Diamonds']] };
 function subnav(tab) {
   const items = SUBNAV[GROUP[tab]]; if (!items) return;
-  view.insertAdjacentHTML('afterbegin', `<nav class="subnav" aria-label="${GROUP[tab] === 'games' ? 'Games' : 'Team'}">${items.map(([k, l]) => `<a href="#${k}"${k === tab ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`);
+  const unread = chatUnread();
+  view.insertAdjacentHTML('afterbegin', `<nav class="subnav" aria-label="${({ games: 'Games', team: 'Team', league: 'League' })[GROUP[tab]]}">${items.map(([k, l]) => `<a href="#${k}"${k === tab ? ' aria-current="page"' : ''}>${l}${k === 'chat' && unread && tab !== 'chat' ? ` <span class="badge" aria-label="${unread} new">${unread}</span>` : ''}</a>`).join('')}</nav>`);
 }
 function render() {
   const tab = (location.hash || '#home').slice(1);
@@ -54,13 +60,15 @@ function render() {
   document.querySelectorAll('.tabs-side a').forEach(a => a.setAttribute('aria-current', a.dataset.tab === tab || (tab === 'gameday' && a.dataset.tab === 'home') ? 'page' : 'false'));
   header();
   if (!st.loaded.team && !st.offline) { view.innerHTML = `<div class="empty">Loading your team…</div>`; return; }
-  if (tab === 'subs' && (st.loaded.team || st.offline)) return renderSubs();
-  if (tab === 'gear' && (st.loaded.team || st.offline)) return renderGear(gearCtx());
+  if (tab === 'subs' && (st.loaded.team || st.offline)) { renderSubs(); subnav(tab); return; }
+  if (tab === 'diamonds' && (st.loaded.team || st.offline)) { renderDiamonds(); subnav(tab); houseAd(); return; }
+  if (tab === 'gear' && (st.loaded.team || st.offline)) { const r = renderGear(gearCtx()); houseAd(); return r; }
   if (!st.team && !st.offline) return renderSetup();
   if (st.offline && !st.team) return renderOffline();
-  const fn = ({ home: renderHome, gameday: renderGameday, subs: renderSubs, schedule: renderSchedule, lineup: renderLineup, score: renderScore, stats: renderStats, roster: renderRoster, board: renderBoard }[tab] || renderHome);
+  const fn = ({ home: renderHome, gameday: renderGameday, subs: renderSubs, schedule: renderSchedule, lineup: renderLineup, score: renderScore, stats: renderStats, roster: renderRoster, board: renderBoard, chat: renderChat }[tab] || renderHome);
   fn();
   subnav(tab);
+  if (['home', 'schedule', 'stats', 'roster', 'board'].includes(tab)) houseAd();
 }
 function header() {
   const t = st.team;
@@ -310,7 +318,7 @@ function renderSchedule() {
   const mine = me && st.players.find(p => p.id === me);
   view.innerHTML = `
   <div class="row" style="margin-top:12px"><div class="grow small muted">${mine ? `You're <b>${esc(mine.name)}</b> <button class="btn ghost small" id="notMe" type="button">Change</button>` : st.players.length ? `Open <b>Show everyone</b> and tap <b>This is me</b> next to your name so you can answer for yourself.` : ''}</div>
-  ${st.canEdit ? `<button class="btn ghost" id="postNotice" type="button">Post notice</button><button class="btn cta" id="addGame" type="button">Add game</button>` : ''}</div>
+  ${st.canEdit ? `<button class="btn ghost" id="postNotice" type="button">Post notice</button><button class="btn ghost" id="impGame" type="button">Import schedule</button><button class="btn cta" id="addGame" type="button">Add game</button>` : ''}</div>
   <div id="gameForm"></div>
   ${up[0] && up[0].date === today() ? gamedayCard(up[0], false) : ''}
   <h2>Coming up</h2>
@@ -337,6 +345,7 @@ function renderSchedule() {
   view.querySelectorAll('[data-editgame]').forEach(b => b.addEventListener('click', () => gameForm(st.games.find(g => g.id === b.dataset.editgame))));
   const ng = document.getElementById('notMe'); if (ng) ng.addEventListener('click', () => confirmInline(ng, 'Unlink you from this name?', () => write(() => platform.unclaimPlayer(me), 'Unlinked'))); 
   const ag = document.getElementById('addGame'); if (ag) ag.addEventListener('click', () => gameForm(null));
+  const ig = document.getElementById('impGame'); if (ig) ig.addEventListener('click', () => importForm());
 }
 function gameCard(g) {
   const d = fmtDate(g.date), counts = { in: 0, maybe: 0, out: 0 };
@@ -868,6 +877,7 @@ function renderMySub() {
   <form class="panel" id="af">
     <p class="muted small">Captains in this league see this profile when they search for subs. Only fill in what you're happy to share.</p>
     <label class="chk big"><input type="checkbox" id="aActive"${a.active ? ' checked' : ''}> <span><b>I'm available to sub right now</b></span></label>
+    <label class="chk"><input type="checkbox" id="aOnline"${a.hideOnline ? '' : ' checked'}> <span>Show captains a green light when I have Dugout open <span class="muted small" style="display:block">So they know you’ll see a request quickly. Only captains see it.</span></span></label>
     <div class="form-grid">
       <label for="aName">Name captains will see<input id="aName" type="text" required maxlength="40" value="${esc(a.name || '')}" placeholder="e.g. Jordan P."></label>
       <label for="aGender">Gender <span class="muted small">(co-ed leagues need it)</span><select id="aGender">${GENDERS.map(([v, l]) => `<option value="${esc(v)}"${(a.gender || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
@@ -902,7 +912,7 @@ function renderMySub() {
     const data = { name: document.getElementById('aName').value.trim(), gender: document.getElementById('aGender').value, skill: +document.getElementById('aSkill').value,
       bats: document.getElementById('aBats').value, throws: document.getElementById('aThrows').value, pos: checked(form, 'pos'), str: checked(form, 'str'), weak: checked(form, 'weak'),
       about: document.getElementById('aAbout').value.trim(), days: checked(form, 'days'), times: checked(form, 'times'), radius: +document.getElementById('aRadius').value,
-      active: document.getElementById('aActive').checked, area: loc ? loc.label : area,
+      active: document.getElementById('aActive').checked, hideOnline: !document.getElementById('aOnline').checked, area: loc ? loc.label : area,
       lat: loc ? loc.lat : null, lng: loc ? loc.lng : null, updated: Date.now() };
     if (!data.name) { btn.disabled = false; return; }
     const contact = document.getElementById('aContact').value.trim();
@@ -915,8 +925,17 @@ function renderMySub() {
 
 function renderFind() {
   const box = document.getElementById('subBody'), from = fromPoint();
+  if (!PAID) {
+    box.innerHTML = `<div class="panel upgrade"><h2>The sub list is for captains</h2>
+      <p>Captains see every player in the league who’s signed up to sub, with distance, positions, level and who’s <span class="online-dot" aria-hidden="true"></span> online right now, and can ask them to play.</p>
+      <ul class="ticks"><li>Search the master sub list</li><li>Start and run teams</li><li>AI schedule import</li><li>No ads</li></ul>
+      <div class="row"><button class="btn cta" type="button" id="upCap">Become a captain, ${esc(CAPTAIN_PRICE)}</button></div>
+      <p class="muted small">Want to sub instead? It’s free: open <b>${st.agents.some(a => a.id === myId) ? 'My sub profile' : 'Sign up to sub'}</b> above.</p></div>`;
+    const b = document.getElementById('upCap'); b.onclick = async () => { b.disabled = true; b.textContent = 'Opening checkout…'; try { await platform.upgrade(); } catch (_) { b.disabled = false; b.textContent = 'Couldn’t open checkout. Try again'; } };
+    return;
+  }
   const list = st.agents.map(a => ({ a, d: from && a.lat != null ? km(from, a) : null })).filter(({ a, d }) =>
-    (!F.activeOnly || a.active) &&
+    (!F.activeOnly || a.active) && (!F.onlineOnly || st.online.has(a.id)) &&
     (!F.pos.length || F.pos.some(p => (a.pos || []).includes(p))) &&
     (!F.gender || a.gender === F.gender) &&
     (!F.skill || (+a.skill || 0) >= F.skill) &&
@@ -927,7 +946,7 @@ function renderFind() {
     (!F.q || [a.name, a.about, a.area].join(' ').toLowerCase().includes(F.q.toLowerCase())) &&
     (!from || d == null || d <= F.km) &&
     (!F.inRange || d == null || d <= (a.radius || 999))
-  ).sort((x, y) => (x.d ?? 1e9) - (y.d ?? 1e9) || (y.a.skill || 0) - (x.a.skill || 0));
+  ).sort((x, y) => (st.online.has(y.a.id) - st.online.has(x.a.id)) || (x.d ?? 1e9) - (y.d ?? 1e9) || (y.a.skill || 0) - (x.a.skill || 0));
   const nF = F.pos.length + F.tags.length + [F.gender, F.skill, F.day, F.time, F.bats, F.throws, F.q].filter(Boolean).length + (F.inRange ? 1 : 0);
   box.innerHTML = `<div class="split">
   <aside class="filters panel" aria-label="Search filters">
@@ -948,6 +967,7 @@ function renderFind() {
       </div>
       <fieldset><legend>Must have</legend>${chips('ftags', STRENGTHS, F.tags)}</fieldset>
       <label class="chk"><input type="checkbox" id="fActive"${F.activeOnly ? ' checked' : ''}> <span>Only players available now</span></label>
+      <label class="chk"><input type="checkbox" id="fOnline"${F.onlineOnly ? ' checked' : ''}> <span><span class="online-dot" aria-hidden="true"></span> Only players online now</span></label>
       <label class="chk"><input type="checkbox" id="fRange"${F.inRange ? ' checked' : ''}> <span>Only players willing to travel that far</span></label>
       <button class="btn ghost small" type="button" id="fClear">Clear filters</button>
     </div></details>
@@ -965,8 +985,9 @@ function renderFind() {
   box.querySelectorAll('input[data-set="fpos"]').forEach(c => c.onchange = () => upd('pos', checked(box, 'fpos')));
   box.querySelectorAll('input[data-set="ftags"]').forEach(c => c.onchange = () => upd('tags', checked(box, 'ftags')));
   document.getElementById('fActive').onchange = e => upd('activeOnly', e.target.checked);
+  document.getElementById('fOnline').onchange = e => upd('onlineOnly', e.target.checked);
   document.getElementById('fRange').onchange = e => upd('inRange', e.target.checked);
-  document.getElementById('fClear').onclick = () => { Object.assign(F, { pos: [], gender: '', skill: 0, day: '', time: '', bats: '', throws: '', tags: [], inRange: false, q: '' }); saveF(); renderFind(); };
+  document.getElementById('fClear').onclick = () => { Object.assign(F, { pos: [], gender: '', skill: 0, day: '', time: '', bats: '', throws: '', tags: [], inRange: false, onlineOnly: false, q: '' }); saveF(); renderFind(); };
   document.getElementById('dForm').addEventListener('submit', async e => {
     e.preventDefault(); const t = document.getElementById('dName').value.trim(); if (!t) return;
     const b = e.target.querySelector('button'); b.disabled = true; b.textContent = 'Finding…';
@@ -984,8 +1005,8 @@ function agentCard(a, d) {
   const far = d != null && a.radius && d > a.radius;
   return `<article class="panel agent" aria-label="${esc(a.name)}">
     <div class="row" style="align-items:flex-start">
-      <div class="crest" aria-hidden="true" style="width:40px;height:40px;font-size:17px">${esc((a.name || '?').trim().slice(0, 1).toUpperCase())}</div>
-      <div class="grow" style="min-width:0"><div class="vs" style="font-size:1.15em">${esc(a.name)}</div>
+      <div class="crest avatar" aria-hidden="true" style="width:40px;height:40px;font-size:17px">${esc((a.name || '?').trim().slice(0, 1).toUpperCase())}${st.online.has(a.id) ? '<span class="online-dot on-avatar"></span>' : ''}</div>
+      <div class="grow" style="min-width:0"><div class="vs" style="font-size:1.15em">${esc(a.name)}</div>${st.online.has(a.id) ? '<div class="online-txt small"><span class="online-dot" aria-hidden="true"></span> Online now</div>' : ''}
         <div class="muted small">${[SKILL[a.skill] || '', (GENDERS.find(g => g[0] === a.gender) || [, ''])[1] && a.gender ? GENDERS.find(g => g[0] === a.gender)[1] : '', `Bats ${esc(a.bats || '?')} · Throws ${esc(a.throws || '?')}`].filter(Boolean).join(' · ')}</div></div>
       ${d != null ? `<span class="pill ${far ? 'maybe' : 'in'}" title="${far ? `Further than the ${esc(a.radius)} km they said they'd travel` : ''}">${d < 1 ? '<1' : Math.round(d)} km${far ? ' · far for them' : ''}</span>` : a.area ? `<span class="pill" style="border:1.5px solid var(--line)">${esc(a.area)}</span>` : ''}
     </div>
@@ -1027,6 +1048,157 @@ function confirmInline(btn, q, go) {
 }
 
 /* sample team for trying it out, clearly labeled */
+
+/* ---------- team chat ---------- */
+const chatKey = () => 'chatSeen-' + (platform.teamId || '') + '-' + (myId || '');
+const chatUnread = () => { const seen = LS.get(chatKey(), 0); return st.chat.filter(m => (m.at || 0) > seen && m.u !== myId).length; };
+const markChatRead = () => { const last = st.chat.length ? st.chat[st.chat.length - 1].at || 0 : 0; if (last > LS.get(chatKey(), 0)) LS.set(chatKey(), last); };
+const chatTime = at => { const d = new Date(at), t = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); return d.toDateString() === new Date().toDateString() ? t : d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) + ', ' + t; };
+function renderChat() {
+  const msgs = st.chat.slice(-300), draft = (document.getElementById('ctxt') || {}).value || '';
+  view.innerHTML = `<h2>Team chat</h2>
+  <div class="panel chat-panel">
+    <div class="chat team-chat" id="tchat" role="log" aria-label="Messages" aria-live="polite">${msgs.length ? msgs.map((m, i) => {
+      const mine = m.u && m.u === myId, prev = msgs[i - 1], sameAuthor = prev && prev.u === m.u && (m.at - prev.at) < 5 * 60000;
+      return `<div class="bubble${mine ? ' mine' : ''}">${!mine && !sameAuthor ? `<div class="who small">${esc(names[m.u] || 'Teammate')}</div>` : ''}<div>${esc(m.text)}</div><div class="muted small">${esc(chatTime(m.at))}${mine || st.canEdit ? ` · <button type="button" class="linkish small" data-delchat="${esc(m.id)}" aria-label="Delete this message">Delete</button>` : ''}</div></div>`;
+    }).join('') : '<p class="muted small">No messages yet. Say hi to the team.</p>'}</div>
+    ${st.canWrite ? `<form class="chat-send" id="cform"><label for="ctxt" class="sr-only">Message</label><textarea id="ctxt" rows="1" maxlength="1000" placeholder="Message the team" enterkeyhint="send" autocomplete="off"></textarea><button class="btn" type="submit">Send</button></form>
+    <p class="muted small" style="margin:0">Everyone on the team sees messages here, live. Enter sends; Shift+Enter starts a new line.</p>` : ''}
+  </div>`;
+  const log = document.getElementById('tchat'); log.scrollTop = log.scrollHeight;
+  markChatRead();
+  const ta = document.getElementById('ctxt');
+  if (ta) {
+    ta.value = draft;
+    const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; }; grow();
+    ta.addEventListener('input', grow);
+    ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); document.getElementById('cform').requestSubmit(); } });
+    document.getElementById('cform').addEventListener('submit', async e => {
+      e.preventDefault(); const t = ta.value.trim(); if (!t) return;
+      ta.value = ''; grow();
+      if (!(await write(() => db.doc('chat/' + Date.now().toString(36) + uid()).set({ text: t, at: Date.now(), u: myId })))) ta.value = t;
+      ta.focus();
+    });
+  }
+  view.querySelectorAll('[data-delchat]').forEach(b => b.addEventListener('click', () => confirmInline(b, 'Delete message?', () => write(() => db.doc('chat/' + b.dataset.delchat).delete()))));
+  const ids = [...new Set(st.chat.map(m => m.u).filter(Boolean))].filter(id => !(id in names));
+  if (user && ids.length) user.profiles(ids).then(ps => { ids.forEach(id => names[id] = (ps[id] && ps[id].name) || 'Teammate'); if ((location.hash || '') === '#chat' && document.activeElement?.id !== 'ctxt') render(); }).catch(() => {});
+}
+
+/* ---------- ads: hidden for captains and anyone who paid to remove them ---------- */
+const HOUSE_ADS = [
+  { t: 'Run your own team', d: `Start teams, see every sub in the league and import your schedule with AI. ${CAPTAIN_PRICE}.`, b: 'Become a captain', go: () => platform.upgrade() },
+  { t: 'Old bat in the garage?', d: 'Sell it to someone in your league. Listing gear on Dugout is free.', b: 'Sell gear', go: () => { location.hash = '#gear'; } },
+  { t: 'Rather not see ads?', d: `Remove them for good with one payment of ${ADFREE_PRICE}. No subscription.`, b: 'Remove ads', go: () => platform.removeAds() },
+  { t: 'Short a player tonight?', d: 'Captains can find a sub nearby who’s online right now.', b: 'Find a sub', go: () => { location.hash = '#subs'; } },
+];
+let adTurn = Math.floor(Math.random() * HOUSE_ADS.length);
+function houseAd() {
+  if (ADFREE || !view) return;
+  const tab = (location.hash || '#home').slice(1), a = HOUSE_ADS[(adTurn + tab.length) % HOUSE_ADS.length];
+  const el = document.createElement('aside'); el.className = 'ad'; el.setAttribute('aria-label', 'Advertisement');
+  el.innerHTML = `<span class="ad-tag">Ad</span><div class="grow"><b>${esc(a.t)}</b><div class="small muted">${esc(a.d)}</div></div><button class="btn ghost small" type="button">${esc(a.b)}</button><button class="linkish small ad-x" type="button" aria-label="Remove ads">Remove ads</button>`;
+  el.querySelector('.btn').onclick = async () => { try { await a.go(); } catch (_) { toast('Couldn’t open checkout. Try again.'); } };
+  el.querySelector('.ad-x').onclick = () => platform.openMenu ? platform.openMenu('mPlan') : null;
+  view.append(el);
+}
+
+/* ---------- AI schedule import: a link or pasted schedule → games with their diamonds ---------- */
+function importForm() {
+  const box = document.getElementById('gameForm');
+  if (!PAID) {
+    box.innerHTML = `<div class="panel upgrade" style="margin-top:12px"><h3>Import your league schedule</h3><p>Paste a link to your league’s schedule and Dugout reads it for you: every game, time and diamond, straight onto your team’s schedule and everyone’s calendar. It’s part of the captain plan.</p><div class="row"><button class="btn cta" type="button" id="upImp">Become a captain, ${esc(CAPTAIN_PRICE)}</button><button class="btn ghost" type="button" id="iCancel">Not now</button></div></div>`;
+    document.getElementById('upImp').onclick = () => platform.upgrade().catch(() => toast('Couldn’t open checkout. Try again.'));
+    document.getElementById('iCancel').onclick = () => box.innerHTML = '';
+    return;
+  }
+  box.innerHTML = `<form class="panel" id="impF" style="margin-top:12px">
+    <h3>Import your league schedule</h3>
+    <p class="muted small" style="margin:0">Paste the link to your league’s schedule page, PDF or calendar. Dugout’s AI reader finds your games and each diamond. You check them before anything is added.</p>
+    <label for="iUrl">Schedule link<input id="iUrl" type="url" inputmode="url" placeholder="https://yourleague.com/schedule" autocomplete="off"></label>
+    <details><summary class="small">No link? Paste the schedule text instead</summary><label for="iText" style="margin-top:8px">Schedule text<textarea id="iText" rows="6" maxlength="60000" placeholder="Copy the schedule from the league email or website and paste it here"></textarea></label></details>
+    <label for="iTeam">Your team’s name in that schedule<input id="iTeam" type="text" maxlength="60" value="${esc(st.team?.name || '')}"></label>
+    <div class="row"><button class="btn cta" type="submit">Read schedule</button><button class="btn ghost" type="button" id="iCancel">Cancel</button></div>
+    <p class="small" id="iMsg" role="status" aria-live="polite"></p>
+    <p class="muted small" style="margin:0">The page is sent to Anthropic’s Claude to read it. Don’t paste anything private.</p>
+  </form><div id="impPrev"></div>`;
+  document.getElementById('iUrl').focus();
+  document.getElementById('iCancel').onclick = () => box.innerHTML = '';
+  document.getElementById('impF').addEventListener('submit', async e => {
+    e.preventDefault();
+    const url = document.getElementById('iUrl').value.trim(), text = document.getElementById('iText').value.trim(), team = document.getElementById('iTeam').value.trim(), msg = document.getElementById('iMsg');
+    if (!url && !text) { msg.className = 'small err'; msg.textContent = 'Paste a link, or the schedule text.'; return; }
+    e.submitter.disabled = true; msg.className = 'small'; msg.innerHTML = '<span class="spinner" aria-hidden="true"></span> Reading the schedule. This takes up to a minute…';
+    try { const res = await platform.importSchedule(url ? { url, team } : { text, team }); msg.textContent = ''; importPreview(res, team); }
+    catch (err) { msg.className = 'small err'; msg.textContent = err.userMessage || 'Couldn’t read that schedule.'; }
+    e.submitter.disabled = false;
+  });
+}
+const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+function matchDiamond(g) {
+  const want = [g.diamond, g.park].map(norm).filter(Boolean);
+  if (!want.length) return null;
+  return st.diamonds.find(d => want.includes(norm(d.name))) || st.diamonds.find(d => want.some(w => norm(d.name).includes(w) || w.includes(norm(d.park || d.name)) && norm(d.park || '').length > 3)) || null;
+}
+function importPreview(res, team) {
+  const prev = document.getElementById('impPrev'), games = res.games || [];
+  const dup = g => st.games.some(x => x.date === g.date && norm(x.opp) === norm(g.opp));
+  if (!games.length) { prev.innerHTML = `<div class="panel" style="margin-top:12px"><p><b>No games found${team ? ` for “${esc(team)}”` : ''}.</b></p>${(res.teams || []).length ? `<p class="small">Teams in that schedule: ${res.teams.map(t => `<button type="button" class="chip-btn" data-useteam="${esc(t)}">${esc(t)}</button>`).join(' ')}</p><p class="muted small">Tap your team, then Read schedule again.</p>` : '<p class="muted small">Check the link opens the schedule itself (not a login page), or paste the text.</p>'}</div>`;
+    prev.querySelectorAll('[data-useteam]').forEach(b => b.onclick = () => { document.getElementById('iTeam').value = b.dataset.useteam; document.getElementById('impF').requestSubmit(); });
+    return; }
+  prev.innerHTML = `<form class="panel" id="impOk" style="margin-top:12px"><h3>${games.length} game${games.length === 1 ? '' : 's'} found${res.league ? ` · ${esc(res.league)}` : ''}</h3>
+    <p class="muted small" style="margin:0">Untick any you don’t want. Diamonds Dugout doesn’t know yet are looked up and added to the map.</p>
+    <div class="imp-list">${games.map((g, i) => { const d = matchDiamond(g), dupe = dup(g);
+      return `<label class="opt opt-wide"><input type="checkbox" data-imp="${i}"${dupe ? '' : ' checked'}> <span><b>${esc(fmtDate(g.date).w)} ${esc(fmtDate(g.date).m)} ${esc(fmtDate(g.date).d)}${g.time ? ', ' + esc(fmtTime(g.time)) : ''}</b> ${g.home === false ? 'at' : 'vs'} ${esc(g.opp)}
+        <span class="muted small" style="display:block">${esc(g.diamond || g.park || 'Diamond not given')}${d ? ' · <span class="pill in">on the map</span>' : g.diamond || g.park ? ' · new diamond' : ''}${dupe ? ' · <b>already on your schedule</b>' : ''}</span></span></label>`; }).join('')}</div>
+    <div class="row"><button class="btn cta" type="submit">Add to schedule</button></div><p class="small" id="impMsg" role="status"></p></form>`;
+  document.getElementById('impOk').addEventListener('submit', async e => {
+    e.preventDefault(); e.submitter.disabled = true;
+    const pick = [...prev.querySelectorAll('[data-imp]:checked')].map(c => games[+c.dataset.imp]);
+    const msg = document.getElementById('impMsg'); let added = 0, placed = 0;
+    for (const g of pick) {
+      msg.textContent = `Adding ${added + 1} of ${pick.length}…`;
+      let d = matchDiamond(g);
+      if (!d && (g.diamond || g.park)) {
+        const q = [g.park || g.diamond, g.address].filter(Boolean).join(', ');
+        try { const loc = await locate(q + (g.address ? '' : (st.team?.place ? ', ' + st.team.place : ''))); const id = uid(); const data = { name: (g.diamond || g.park).slice(0, 60), park: g.park || '', address: g.address || '', label: loc.label, lat: loc.lat, lng: loc.lng };
+          await db.doc('diamonds/' + id).set(data); d = { id, ...data }; st.diamonds.push(d); placed++; } catch (_) { d = null; }
+      }
+      const ok = await write(() => db.doc('games/' + uid()).set({ opp: g.opp, date: g.date, time: g.time || '', field: (g.diamond || g.park || '').slice(0, 40), home: g.home !== false, diamond: d ? d.id : null, lat: d ? d.lat : null, lng: d ? d.lng : null, status: 'scheduled', us: [], them: [], inning: 1, bi: 0, imported: true }));
+      if (ok) added++;
+    }
+    toast(`Added ${added} game${added === 1 ? '' : 's'}${placed ? `, ${placed} new diamond${placed === 1 ? '' : 's'}` : ''}`);
+    document.getElementById('gameForm').innerHTML = '';
+  });
+}
+
+/* ---------- Diamonds: every ball diamond in town, with directions ---------- */
+let diaQ = '';
+function renderDiamonds() {
+  const home = st.team && st.team.lat != null ? { lat: st.team.lat, lng: st.team.lng } : null;
+  const groups = {};
+  st.diamonds.forEach(d => { const k = d.park || d.name; (groups[k] = groups[k] || []).push(d); });
+  let parks = Object.entries(groups).map(([park, ds]) => { const lat = ds.reduce((s, d) => s + d.lat, 0) / ds.length, lng = ds.reduce((s, d) => s + d.lng, 0) / ds.length;
+    return { park, ds: ds.sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { numeric: true })), lat, lng, lit: ds.some(d => d.lit), km: home ? km(home, { lat, lng }) : null, next: sortedGames().find(g => g.date >= today() && g.status !== 'final' && ds.some(d => d.id === g.diamond)) }; });
+  const q = norm(diaQ);
+  if (q) parks = parks.filter(p => norm(p.park + ' ' + p.ds.map(d => d.name + ' ' + (d.address || d.label || '')).join(' ')).includes(q));
+  parks.sort((a, b) => (!!b.next - !!a.next) || (a.km ?? 1e9) - (b.km ?? 1e9) || a.park.localeCompare(b.park));
+  const dir = (lat, lng) => `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+  const map = (lat, lng, name) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name)}%20${lat},${lng}`;
+  view.innerHTML = `<h2>Diamonds</h2>
+  <p class="muted small" style="margin-top:-6px">${st.diamonds.length} diamonds at ${Object.keys(groups).length} parks${home ? `, nearest to ${esc(st.team.place || 'your home area')} first` : ''}. Tap for directions in Google Maps.</p>
+  <label for="dq" class="sr-only">Search diamonds</label><input id="dq" type="search" placeholder="Search parks, e.g. Hampton, Mooney’s Bay" value="${esc(diaQ)}" style="width:100%;margin-bottom:12px">
+  <div class="stack">${parks.slice(0, 120).map(p => `<article class="panel dia">
+    <div class="row"><div class="grow"><b class="vs" style="font-size:1.15em">${esc(p.park)}</b><div class="muted small">${[p.ds.length > 1 ? `${p.ds.length} diamonds` : '', p.lit ? 'Lights' : '', p.km != null ? `${p.km < 1 ? '<1' : Math.round(p.km)} km` : '', esc(p.ds[0].address || p.ds[0].label || '')].filter(Boolean).join(' · ')}</div>
+      ${p.next ? `<div class="small"><span class="pill in">Next game here</span> ${esc(gameWhen(p.next))} vs ${esc(p.next.opp)}</div>` : ''}</div>
+      <a class="btn small" href="${esc(dir(p.lat, p.lng))}" target="_blank" rel="noopener">Directions</a><a class="btn ghost small" href="${esc(map(p.lat, p.lng, p.park))}" target="_blank" rel="noopener">Map</a></div>
+    ${p.ds.length > 1 ? `<details><summary class="small">Each diamond</summary><ul class="dia-list">${p.ds.map(d => `<li><span class="grow">${esc(d.name)}${d.lit ? ' <span class="muted small">· lights</span>' : ''}</span><a class="linkish small" href="${esc(dir(d.lat, d.lng))}" target="_blank" rel="noopener">Directions</a></li>`).join('')}</ul></details>` : ''}
+  </article>`).join('') || `<div class="panel empty">${q ? 'No parks match that search.' : 'No diamonds yet. Captains can add one from Find a sub, or import a schedule.'}</div>`}</div>
+  ${st.diamonds.some(d => d.src === 'osm') ? '<p class="muted small" style="margin-top:12px">Diamond locations © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors.</p>' : ''}`;
+  const inp = document.getElementById('dq');
+  inp.addEventListener('input', () => { diaQ = inp.value; clearTimeout(inp.t); inp.t = setTimeout(() => { const pos = inp.selectionStart; render(); const n = document.getElementById('dq'); n.focus(); n.setSelectionRange(pos, pos); }, 250); });
+}
+
 async function loadDemo() {
   const names = ['Sam R.', 'Priya K.', 'Marcus T.', 'Jen L.', 'Diego M.', 'Alexis W.', 'Tom B.', 'Keisha D.', 'Ryan O.', 'Mei C.', 'Luis G.', 'Hannah P.'];
   const pos = [['P'], ['C', '1B'], ['SS', '2B'], ['LF', 'LCF'], ['3B'], ['2B'], ['RCF', 'RF'], ['1B'], ['LCF', 'RCF'], ['RF', 'LF'], ['P', '3B'], ['C']];
@@ -1041,9 +1213,7 @@ async function loadDemo() {
 }
 
 /* ---------- boot ---------- */
-const big = document.getElementById('bigText');
-if (LS.get('big', false)) { document.documentElement.classList.add('big'); big.setAttribute('aria-pressed', 'true'); }
-big.addEventListener('click', () => { const on = !document.documentElement.classList.contains('big'); document.documentElement.classList.toggle('big', on); big.setAttribute('aria-pressed', on); LS.set('big', on); });
+document.getElementById('bigText').onclick = () => platform.openMenu ? platform.openMenu('mPrefs') : null;
 window.addEventListener('hashchange', render);
 render();
 
@@ -1055,7 +1225,7 @@ render();
   st.canEdit = user ? !!user.canEdit() : false;
   try { myId = user ? await user.id() : null; } catch (_) { myId = null; }
   const cw = user ? user.can('data.write') : null; st.canWrite = cw === null ? true : !!cw;
-  let pending = null; const soon = () => { clearTimeout(pending); pending = setTimeout(() => { if ((location.hash || '') === '#gear' && gearBusy()) { header(); return; } const ae = document.activeElement, chatting = ae && ae.id === 'mtxt'; if (!ae || !['INPUT', 'TEXTAREA', 'SELECT'].includes(ae.tagName) || chatting) { render(); if (chatting) { const m = document.getElementById('mtxt'); if (m) { m.focus(); m.setSelectionRange(m.value.length, m.value.length); } } } else pendingRender = true; }, 60); };
+  let pending = null; const soon = () => { clearTimeout(pending); pending = setTimeout(() => { if ((location.hash || '') === '#gear' && gearBusy()) { header(); return; } const ae = document.activeElement, chatting = ae && (ae.id === 'mtxt' || ae.id === 'ctxt'); if (!ae || !['INPUT', 'TEXTAREA', 'SELECT'].includes(ae.tagName) || chatting) { render(); if (chatting) { const m = document.getElementById(ae.id); if (m) { m.focus(); m.setSelectionRange(m.value.length, m.value.length); } } } else pendingRender = true; }, 60); };
   let pendingRender = false; document.addEventListener('focusout', () => { if (pendingRender) { pendingRender = false; setTimeout(render, 0); } });
   const fail = () => { clearTimeout(timer); };
   db.doc('team/info').onSnapshot(s => { clearTimeout(timer); st.team = s.exists ? s.data() : null; st.loaded.team = true; st.offline = false; soon(); }, fail);
@@ -1068,6 +1238,13 @@ render();
   db.collection('invites').onSnapshot(s => { st.invites = s.docs.map(d => ({ id: d.id, ...d.data() })); db.collection('contacts').refresh().catch(() => {}); soon(); }, fail);
   db.collection('contacts').onSnapshot(s => { st.contacts = {}; s.docs.forEach(d => st.contacts[d.id] = d.data().contact); soon(); }, fail);
   db.collection('posts').onSnapshot(s => { st.posts = s.docs.map(d => ({ id: d.id, ...d.data() })); soon(); }, fail);
+  db.collection('chat').onSnapshot(s => { st.chat = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.at || 0) - (b.at || 0)); if ((location.hash || '') === '#chat') markChatRead(); soon(); }, fail);
+  // "online now": check in while the app is on screen; captains see who else is
+  const beat = () => { if (document.visibilityState === 'visible') platform.heartbeat && platform.heartbeat(); };
+  const poll = async () => { if (!PAID || !platform.onlineSubs || document.visibilityState !== 'visible') return; try { const ids = await platform.onlineSubs(); const n = new Set(ids); if ([...n].join() !== [...st.online].join()) { st.online = n; soon(); } } catch (_) {} };
+  beat(); poll(); setInterval(beat, 60000); setInterval(poll, 60000);
+  document.addEventListener('visibilitychange', () => { beat(); poll(); });
+  window.addEventListener('hashchange', () => { if (location.hash === '#subs') poll(); });
   db.collection('listings').onSnapshot(s => { st.listings = s.docs.map(d => ({ id: d.id, ...d.data() })); soon(); }, fail);
   db.collection('threads').onSnapshot(s => { st.threads = s.docs.map(d => ({ id: d.id, ...d.data() })); db.collection('messages').refresh().catch(() => {}); soon(); }, fail);
   db.collection('messages').onSnapshot(s => { st.messages = s.docs.map(d => ({ id: d.id, ...d.data() })); soon(); }, fail);

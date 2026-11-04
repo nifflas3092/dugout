@@ -45,6 +45,23 @@ create table if not exists public.join_attempts (
 );
 create index if not exists join_attempts_user_at on public.join_attempts (user_id, at);
 
+-- one row per person: what they've paid for, and their private calendar link.
+-- Only the payment webhook (running with the service key) changes plans; people can read their own row.
+create table if not exists public.accounts (
+  user_id uuid primary key references auth.users on delete cascade,
+  captain_status text not null default 'none' check (captain_status in ('none', 'active', 'trialing', 'past_due', 'canceled')),
+  captain_until timestamptz,
+  grandfathered boolean not null default false,       -- captains from before paid plans keep captain tools free
+  ad_free boolean not null default false,
+  stripe_customer text,
+  cal_token text not null unique default replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', ''),
+  updated_at timestamptz not null default now()
+);
+create table if not exists public.app_flags (key text primary key, at timestamptz not null default now());
+-- AI schedule imports, for a daily limit
+create table if not exists public.import_log (user_id uuid not null references auth.users on delete cascade, at timestamptz not null default now());
+create index if not exists import_log_user_at on public.import_log (user_id, at);
+
 -- all app data. scope = a team id, or 'global' for the league-wide sub list
 create table if not exists public.docs (
   scope text not null,
@@ -56,7 +73,7 @@ create table if not exists public.docs (
   updated_at timestamptz not null default now(),
   primary key (scope, col, id),
   constraint docs_id_format check (id ~ '^[A-Za-z0-9_-]{1,80}$'),
-  constraint docs_col_known check (col in ('team', 'players', 'games', 'rsvp', 'ab', 'posts', 'agents', 'contacts', 'diamonds', 'invites', 'listings', 'threads', 'messages', 'reports')),
+  constraint docs_col_known check (col in ('team', 'players', 'games', 'rsvp', 'ab', 'posts', 'chat', 'agents', 'contacts', 'diamonds', 'invites', 'listings', 'threads', 'messages', 'reports')),
   constraint docs_scope_matches check ((scope = 'global') = (col in ('agents', 'contacts', 'diamonds', 'invites', 'listings', 'threads', 'messages', 'reports'))),
   constraint docs_is_object check (jsonb_typeof(data) = 'object'),
   constraint docs_size check (pg_column_size(data) <= 32768)
@@ -70,7 +87,7 @@ drop function if exists public.touch_doc() cascade;
 do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'docs_id_format') then
     alter table public.docs add constraint docs_id_format check (id ~ '^[A-Za-z0-9_-]{1,80}$') not valid,
-      add constraint docs_col_known check (col in ('team', 'players', 'games', 'rsvp', 'ab', 'posts', 'agents', 'contacts', 'diamonds', 'invites', 'listings', 'threads', 'messages', 'reports')) not valid,
+      add constraint docs_col_known check (col in ('team', 'players', 'games', 'rsvp', 'ab', 'posts', 'chat', 'agents', 'contacts', 'diamonds', 'invites', 'listings', 'threads', 'messages', 'reports')) not valid,
       add constraint docs_scope_matches check ((scope = 'global') = (col in ('agents', 'contacts', 'diamonds', 'invites', 'listings', 'threads', 'messages', 'reports'))) not valid,
       add constraint docs_is_object check (jsonb_typeof(data) = 'object') not valid,
       add constraint docs_size check (pg_column_size(data) <= 32768) not valid;
@@ -78,7 +95,7 @@ do $$ begin
 end $$;
 -- the lists of collections grow as features are added: rebuild those two checks every run
 alter table public.docs drop constraint if exists docs_col_known, drop constraint if exists docs_scope_matches;
-alter table public.docs add constraint docs_col_known check (col in ('team', 'players', 'games', 'rsvp', 'ab', 'posts', 'agents', 'contacts', 'diamonds', 'invites', 'listings', 'threads', 'messages', 'reports')),
+alter table public.docs add constraint docs_col_known check (col in ('team', 'players', 'games', 'rsvp', 'ab', 'posts', 'chat', 'agents', 'contacts', 'diamonds', 'invites', 'listings', 'threads', 'messages', 'reports')),
   add constraint docs_scope_matches check ((scope = 'global') = (col in ('agents', 'contacts', 'diamonds', 'invites', 'listings', 'threads', 'messages', 'reports')));
 -- move any contact details out of sub profiles into the private contacts collection
 insert into public.docs (scope, col, id, data, owner)
@@ -96,10 +113,14 @@ alter table public.teams enable row level security;
 alter table public.team_members enable row level security;
 alter table public.join_attempts enable row level security;
 alter table public.docs enable row level security;
+alter table public.accounts enable row level security;
+alter table public.app_flags enable row level security;
+alter table public.import_log enable row level security;
 
 -- signed-out visitors get nothing; signed-in users get only what the policies below allow
 -- (Supabase grants every new table to anon and authenticated by default, so take it all back first, then grant only what's needed)
-revoke all on public.profiles, public.teams, public.team_members, public.join_attempts, public.docs from anon, authenticated, public;
+revoke all on public.profiles, public.teams, public.team_members, public.join_attempts, public.docs, public.accounts, public.app_flags, public.import_log from anon, authenticated, public;
+grant select on public.accounts to authenticated;
 grant select, insert, delete on public.docs to authenticated;
 grant update (scope, col, id, data) on public.docs to authenticated;  -- the key columns are needed for upserts; a trigger stops them changing
 grant select on public.teams to authenticated;
@@ -124,6 +145,12 @@ $$;
 create or replace function public.is_any_captain() returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (select 1 from public.team_members m where m.user_id = (select auth.uid()) and m.role = 'captain');
+$$;
+-- has this person got captain tools? an active $5/month plan, or a captain from before paid plans
+create or replace function public.is_paid_captain() returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.accounts a where a.user_id = (select auth.uid())
+                 and (a.grandfathered or (a.captain_status in ('active', 'trialing') and (a.captain_until is null or a.captain_until > now() - interval '3 days'))));
 $$;
 create or replace function public.shares_team(other uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
@@ -160,7 +187,7 @@ $$;
 ---------------------------------------------------------------------------
 do $$ declare r record; begin
   for r in select policyname, tablename from pg_policies where schemaname = 'public'
-           and tablename in ('profiles', 'teams', 'team_members', 'join_attempts', 'docs') loop
+           and tablename in ('profiles', 'teams', 'team_members', 'join_attempts', 'docs', 'accounts', 'app_flags', 'import_log') loop
     execute format('drop policy %I on public.%I', r.policyname, r.tablename);
   end loop;
 end $$;
@@ -186,8 +213,12 @@ create policy members_remove on public.team_members for delete to authenticated
 -- docs: reading
 create policy docs_read_team on public.docs for select to authenticated
   using (scope <> 'global' and public.is_member(scope));
+create policy docs_read_diamonds on public.docs for select to authenticated
+  using (scope = 'global' and col = 'diamonds');
+-- the master list of subs is a captain feature; everyone can see their own sub profile
 create policy docs_read_sub_list on public.docs for select to authenticated
-  using (scope = 'global' and col in ('agents', 'diamonds'));
+  using (scope = 'global' and col = 'agents' and (id = (select auth.uid())::text or public.is_paid_captain()));
+create policy accounts_read_own on public.accounts for select to authenticated using (user_id = (select auth.uid()));
 create policy docs_read_contacts on public.docs for select to authenticated
   using (scope = 'global' and col = 'contacts' and (id = (select auth.uid())::text or public.contact_unlocked(id)));
 create policy docs_read_invites on public.docs for select to authenticated
@@ -236,6 +267,12 @@ create policy docs_report_insert on public.docs for insert to authenticated
   with check (scope = 'global' and col = 'reports');
 -- (no one can read reports through the app; review them in the Supabase dashboard)
 
+-- docs: team chat. Members talk; anyone can delete their own message, captains any
+create policy docs_chat_insert on public.docs for insert to authenticated
+  with check (col = 'chat' and public.is_member(scope));
+create policy docs_chat_delete_own on public.docs for delete to authenticated
+  using (col = 'chat' and owner = (select auth.uid()));
+
 -- docs: the sub list
 create policy docs_own_profile_insert on public.docs for insert to authenticated
   with check (scope = 'global' and col in ('agents', 'contacts') and id = (select auth.uid())::text);
@@ -254,7 +291,7 @@ create policy docs_diamond_delete on public.docs for delete to authenticated
   using (scope = 'global' and col = 'diamonds' and owner = (select auth.uid()));
 
 create policy docs_invite_insert on public.docs for insert to authenticated
-  with check (scope = 'global' and col = 'invites' and public.is_any_captain());
+  with check (scope = 'global' and col = 'invites' and public.is_paid_captain());
 create policy docs_invite_update on public.docs for update to authenticated
   using (scope = 'global' and col = 'invites' and (owner = (select auth.uid()) or data->>'agent' = (select auth.uid())::text))
   with check (scope = 'global' and col = 'invites');
@@ -319,7 +356,7 @@ begin
        or coalesce(new.data->>'bats', 'R') not in ('R', 'L', 'S') or coalesce(new.data->>'throws', 'R') not in ('R', 'L')
        or coalesce(new.data->>'skill', '1') !~ '^[1-5]$' or coalesce(new.data->>'radius', '15') !~ '^[0-9]{1,3}$'
        or char_length(coalesce(new.data->>'area', '')) > 80
-       or jsonb_typeof(coalesce(new.data->'active', 'true')) <> 'boolean'
+       or jsonb_typeof(coalesce(new.data->'active', 'true')) <> 'boolean' or jsonb_typeof(coalesce(new.data->'hideOnline', 'false')) <> 'boolean'
        or jsonb_typeof(coalesce(new.data->'pos', '[]')) <> 'array' or jsonb_typeof(coalesce(new.data->'days', '[]')) <> 'array'
        or jsonb_typeof(coalesce(new.data->'times', '[]')) <> 'array' or jsonb_typeof(coalesce(new.data->'str', '[]')) <> 'array'
        or jsonb_typeof(coalesce(new.data->'weak', '[]')) <> 'array'
@@ -395,6 +432,13 @@ begin
     if char_length(coalesce(new.data->>'text', '')) not between 1 and 1000 then raise exception 'Messages are 1 to 1000 characters'; end if;
     new.data := jsonb_build_object('thread', new.data->>'thread', 'text', new.data->>'text', 'from', me::text,
                                    'at', (extract(epoch from now()) * 1000)::bigint);
+
+  elsif new.col = 'chat' then
+    if tg_op = 'UPDATE' then raise exception 'Messages can''t be edited'; end if;
+    select count(*) into recent from public.docs where owner = me and col in ('chat', 'messages') and created_at > now() - interval '10 minutes';
+    if recent >= 80 then raise exception 'Slow down a little. Try again in a few minutes.'; end if;
+    if char_length(coalesce(new.data->>'text', '')) not between 1 and 1000 then raise exception 'Messages are 1 to 1000 characters'; end if;
+    new.data := jsonb_build_object('text', new.data->>'text', 'u', me::text, 'at', (extract(epoch from now()) * 1000)::bigint);
 
   elsif new.col = 'reports' then
     if tg_op = 'UPDATE' then raise exception 'Reports can''t be edited'; end if;
@@ -507,16 +551,27 @@ begin
   insert into public.profiles (id, display_name)
   values (new.id, left(coalesce(nullif(trim(new.raw_user_meta_data->>'name'), ''), split_part(new.email, '@', 1), ''), 40))
   on conflict (id) do nothing;
+  insert into public.accounts (user_id) values (new.id) on conflict (user_id) do nothing;
   return new;
 end $$;
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created after insert on auth.users for each row execute function public.handle_new_user();
+
+insert into public.accounts (user_id) select id from auth.users on conflict (user_id) do nothing;
+-- the first time paid plans switch on, everyone who is already a captain keeps captain tools for free
+do $$ begin
+  if not exists (select 1 from public.app_flags where key = 'grandfathered') then
+    update public.accounts set grandfathered = true where user_id in (select user_id from public.team_members where role = 'captain');
+    insert into public.app_flags (key) values ('grandfathered');
+  end if;
+end $$;
 
 create or replace function public.create_team(team_name text) returns uuid
 language plpgsql security definer set search_path = '' as $$
 declare me uuid := (select auth.uid()); tid uuid; n int;
 begin
   if me is null then raise exception 'Sign in first'; end if;
+  if not public.is_paid_captain() then raise exception 'Starting a team is a captain feature. Upgrade to captain first.'; end if;
   select count(*) into n from public.team_members where user_id = me;
   if n >= 20 then raise exception 'You''re on a lot of teams already'; end if;
   insert into public.teams (name, join_code, created_by) values (left(trim(team_name), 40), public.new_join_code(), me) returning id into tid;
@@ -578,6 +633,16 @@ begin
   perform set_config('dugout.claiming', '', true);
 end $$;
 
+-- a new private calendar link (the old one stops working)
+create or replace function public.reset_cal_token() returns text
+language plpgsql security definer set search_path = '' as $$
+declare t text := replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '');
+begin
+  if (select auth.uid()) is null then raise exception 'Sign in first'; end if;
+  update public.accounts set cal_token = t, updated_at = now() where user_id = (select auth.uid());
+  return t;
+end $$;
+
 -- merge a few fields into a doc. Runs as the caller, so all the policies and checks above still apply.
 create or replace function public.doc_update(p_scope text, p_col text, p_id text, patch jsonb) returns void
 language plpgsql security invoker set search_path = '' as $$
@@ -593,6 +658,9 @@ language plpgsql security definer set search_path = '' as $$
 declare me uuid := (select auth.uid()); r record;
 begin
   if me is null then raise exception 'Sign in first'; end if;
+  if exists (select 1 from public.accounts where user_id = me and captain_status in ('active', 'trialing', 'past_due')) then
+    raise exception 'Cancel your captain plan first (Team menu, Manage plan), then delete your account.';
+  end if;
   -- hand captaincy to the longest-standing member where you're the only captain
   for r in select m.team_id from public.team_members m where m.user_id = me and m.role = 'captain'
            and not exists (select 1 from public.team_members o where o.team_id = m.team_id and o.role = 'captain' and o.user_id <> me) loop
@@ -608,11 +676,29 @@ begin
   delete from auth.users where id = me;                  -- removes the sign-in and the profile
 end $$;
 
+-- "online now" for the sub list: the app checks in about once a minute while it's open.
+-- Only paid captains can ask who's online, only for people on the sub list, and never for subs who switched it off.
+alter table public.accounts add column if not exists last_seen timestamptz;
+create or replace function public.i_am_here() returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if (select auth.uid()) is null then return; end if;
+  update public.accounts set last_seen = now()
+    where user_id = (select auth.uid()) and (last_seen is null or last_seen < now() - interval '45 seconds');
+end $$;
+create or replace function public.online_subs() returns setof text
+language sql stable security definer set search_path = '' as $$
+  select a.id from public.docs a join public.accounts ac on ac.user_id::text = a.id
+  where public.is_paid_captain() and a.scope = 'global' and a.col = 'agents'
+    and coalesce(a.data->>'hideOnline', 'false') <> 'true' and ac.last_seen > now() - interval '3 minutes';
+$$;
+
 -- nobody signed out can call any of these; signed-in users can call only the app's actions
 revoke execute on all functions in schema public from public, anon;
 grant execute on function public.create_team(text), public.join_team(text), public.reset_join_code(uuid),
   public.claim_player(uuid, text), public.unclaim_player(uuid, text), public.doc_update(text, text, text, jsonb),
-  public.delete_my_account(), public.mark_thread_seen(text) to authenticated;
+  public.delete_my_account(), public.mark_thread_seen(text), public.reset_cal_token(), public.i_am_here(), public.online_subs() to authenticated;
+grant execute on function public.is_paid_captain() to authenticated;
 grant execute on function public.is_member(text), public.is_captain(text), public.is_any_captain(), public.shares_team(uuid),
   public.contact_unlocked(text), public.owns_player(text, text), public.in_thread(text) to authenticated;
 alter default privileges in schema public revoke execute on functions from public, anon;

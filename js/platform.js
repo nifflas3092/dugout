@@ -5,7 +5,7 @@ import { GEOCODER, MAPBOX_TOKEN } from '../config.js';
 
 const GLOBAL = new Set(['agents', 'contacts', 'diamonds', 'invites', 'listings', 'threads', 'messages', 'reports']); // the league-wide sub list; everything else belongs to one team
 
-export function createPlatform(sb, { session, teamId, role, profileName }) {
+export function createPlatform(sb, { session, teamId, role, profileName, account = {} }) {
   const uid = session.user.id;
   const scopeOf = col => (GLOBAL.has(col) ? 'global' : teamId);
   const cache = new Map();      // col -> Map(id -> data)
@@ -110,6 +110,16 @@ export function createPlatform(sb, { session, teamId, role, profileName }) {
 
   return {
     teamId,
+    account,
+    // "online now" for the sub list: a check-in about once a minute while the app is open and on screen
+    heartbeat: () => rpc('i_am_here', {}).catch(() => {}),
+    onlineSubs: async () => { const { data, error } = await sb.rpc('online_subs'); if (error) throw error; return (data || []).map(r => typeof r === 'string' ? r : r.online_subs); },
+    // read a league schedule with the AI reader (server function import-schedule)
+    async importSchedule(body) {
+      const { data, error } = await sb.functions.invoke('import-schedule', { body });
+      if (error) { let msg = ''; try { msg = (await error.context.json()).error; } catch (_) {} const e = new Error(msg || 'import'); e.userMessage = msg || 'Couldn’t read that schedule. Try again, or paste the schedule text instead.'; throw e; }
+      return data;
+    },
     markSeen: thread => rpc('mark_thread_seen', { p_thread: thread }),
     // listing photos live in Supabase Storage under <your id>/<listing id>/<file>
     photos: {

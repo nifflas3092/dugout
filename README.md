@@ -15,6 +15,13 @@ Team app for rec league slowpitch:
 - **Team messages**: one tap sends an RSVP reminder (with who hasn't answered), a rain-out notice or a makeup date to your team's WhatsApp or text group
 - **Digital scorecard**: a scorebook grid (a row per batter, a box per inning) that fills in as you score. Tap the play (single, groundout, sac fly, double play…), optionally tap who fielded it, check where each runner ended up (Dugout moves them for you), and save. Runs, RBIs, outs and the side changing are worked out automatically, with standard notation (6-3, F8, K) and base paths drawn in each box. Undo is exact; box score and season stats update live
 - **Gear**: a used-equipment marketplace with photos, filters, and private messages between buyer and seller
+- **Accounts**: log in with email and password, create an account, reset a forgotten password, log out or log out everywhere, change password. Display settings (text size up to extra large, light/dark, high contrast, reduce motion, underlined links) on the sign-in screen and in the menu
+- **Plans**: everyone signs up free as a player. The **captain plan ($5/month)** unlocks starting teams, the master sub list and AI schedule import, with no ads. Anyone can **remove ads forever ($7.99, one payment)**. Captains from before plans existed stay free
+- **Team chat**: live chat for each team, with unread counts
+- **Online now**: captains see a green light on subs who have Dugout open (subs can switch it off)
+- **AI schedule import**: paste a link to the league's schedule (web page, PDF, calendar or text). Claude reads it, finds your games and diamonds, and you confirm before they're added
+- **Calendar sync**: a private link that puts every game from all your teams in Google, Apple or Outlook Calendar, with the diamond's address and a map link. It updates itself
+- **Diamonds**: every park and diamond the league uses, nearest first, with Google Maps directions
 
 It's a plain website with no build step. People open it in a browser or add it to their home screen, where it works like an installed app. Data lives in [Supabase](https://supabase.com), a hosted Postgres database with sign-in. Hosting is free on Vercel or Netlify.
 
@@ -37,11 +44,8 @@ It's a plain website with no build step. People open it in a browser or add it t
 
 ### 2. Set up sign-in emails
 
-1. Go to **Authentication → Emails → Magic Link**. Add the code to the email, for example: `Your Dugout code: {{ .Token }}`.
-   - People type this code into the app.
-   - This works even when their mail app opens links in a different browser.
-2. In **Authentication → Providers → Email**, set the OTP expiry to **3600**.
-3. Go to **Authentication → URL Configuration**. Set **Site URL** to your website's address and add it under **Redirect URLs** (you'll get the address in step 3; come back for this).
+1. In **Authentication → Sign In / Providers → Email**, keep **Email** on and **Confirm email** on (people confirm their address once, by tapping the link in the email). Set the minimum password length to **8**.
+2. Go to **Authentication → URL Configuration**. Set **Site URL** to your website's address and add it under **Redirect URLs** (you'll get the address in step 3; come back for this).
 4. Before inviting real teams, set up **custom SMTP**. The built-in sender only manages a couple of emails an hour.
    - [Resend](https://resend.com) has a free tier.
    - Turn off link tracking in your email provider.
@@ -53,7 +57,53 @@ It's a plain website with no build step. People open it in a browser or add it t
 3. Every push to GitHub now redeploys the site automatically.
 4. The security headers in `vercel.json` are applied for you. Netlify works the same way using `netlify.toml`.
 
-### 3b. Turn on game forecasts
+### 3a. Server functions (payments, AI import, calendar)
+
+These run on Supabase. Install the [Supabase CLI](https://supabase.com/docs/guides/cli), then from this folder:
+
+```
+supabase login
+supabase link --project-ref btshfjneizmnqgkrcwvb
+supabase functions deploy create-checkout
+supabase functions deploy billing-portal
+supabase functions deploy import-schedule
+supabase functions deploy stripe-webhook --no-verify-jwt
+supabase functions deploy calendar --no-verify-jwt
+supabase secrets set ALLOWED_ORIGINS=https://dugout-one-sand.vercel.app
+```
+
+(`--no-verify-jwt` is for the two that are called by Stripe and by calendar apps, which can't sign in. They check a Stripe signature and a long private link instead.)
+
+### 3b. Get paid (Stripe)
+
+1. Sign up at **stripe.com**. Stay in **Test mode** until you've tried it end to end.
+2. **Product catalogue → Add product**:
+   - "Dugout Captain", **recurring**, $5.00 CAD monthly. Copy its price id (`price_…`).
+   - "Dugout: no ads", **one-off**, $7.99 CAD. Copy its price id.
+3. **Developers → Webhooks → Add endpoint**: `https://btshfjneizmnqgkrcwvb.supabase.co/functions/v1/stripe-webhook`, with the events `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`. Copy the signing secret (`whsec_…`).
+4. **Settings → Billing → Customer portal**: turn on cancelling and updating the payment method.
+5. Save the keys as secrets (never in `config.js` or GitHub):
+   ```
+   supabase secrets set STRIPE_SECRET_KEY=sk_test_… STRIPE_WEBHOOK_SECRET=whsec_… STRIPE_PRICE_CAPTAIN=price_… STRIPE_PRICE_ADFREE=price_…
+   ```
+6. Test with card `4242 4242 4242 4242`. When it works, switch Stripe to live mode, make the same two products, and set the live keys.
+7. If you change prices, update `CAPTAIN_PRICE` and `ADFREE_PRICE` in `config.js` so the app shows the right amount.
+
+You collect sales tax yourself unless you turn on Stripe Tax. Ask an accountant once you're earning.
+
+### 3c. AI schedule import
+
+1. Get an API key at **console.anthropic.com** and add a spending limit (Settings → Limits).
+2. `supabase secrets set ANTHROPIC_API_KEY=sk-ant-…`
+3. Optional: `supabase secrets set ANTHROPIC_MODEL=claude-sonnet-5-5` for harder schedules (the default, `claude-haiku-5-5`, is cheaper). One import usually costs well under a cent.
+
+Only paid captains can import, up to 20 times a day each. The function refuses private network addresses and files over 4 MB.
+
+### 3d. Ads
+
+Free players see small house ads (for the captain plan, Gear and removing ads) on Home, Schedule, Team, Diamonds and Gear. Captains and anyone who paid see none. To run real ads later (for example Google AdSense), the slot is `houseAd()` in `js/app.js`; you'd also need to add the ad network to the Content-Security-Policy in `index.html`, `vercel.json` and `netlify.toml`, and ask for consent before personalised ads.
+
+### 3e. Turn on game forecasts
 
 1. On the **Team** tab, under Team settings, enter your **home area** (a postal code is best).
 2. When you add a game, you can also pick a specific park from the sub finder's diamonds.
@@ -62,9 +112,9 @@ Forecasts come from MET Norway and cover about the next 9 days. They're free to 
 
 ### 4. Try it
 
-1. Open your site on your phone and sign in with the emailed code.
+1. Open your site on your phone and create an account.
 2. Start a team and add a couple of players and a game.
-3. Go to **Team menu → Share link** and send the link to a friend.
+3. Go to **Menu → Share link** and send the link to a friend.
 4. Your friend joins, taps **This is me** next to their name, and answers In or Out. You should see it appear live.
 
 ### 5. Before launch
@@ -83,7 +133,9 @@ Forecasts come from MET Norway and cover about the next 9 days. They're free to 
 | Post on the board | | | ✓ (delete own) | ✓ (pin, delete any) |
 | Change roster, games, lineup, score | | | | ✓ |
 | Invite players, new code, make co-captains | | | | ✓ |
-| See the sub list | | ✓ | ✓ | ✓ |
+| See the sub list (and who's online) | | Own profile only | Own profile only | Paid captains |
+| Start a team, import a schedule | | | | Paid captains |
+| Team chat | | | ✓ (delete own) | ✓ (delete any) |
 | See a sub's contact details | | | | After they say yes |
 | Ask a sub to play | | | | ✓ |
 | Mark a game rained out, schedule the makeup | | | | ✓ |
@@ -97,7 +149,9 @@ The database enforces all of this, not just the app. See [SECURITY.md](SECURITY.
 | File | What it does |
 |---|---|
 | `index.html`, `style.css` | The page and its look (light and dark, phone and desktop) |
-| `js/main.js` | Sign-in with an emailed code, joining or starting a team, the team menu, deleting an account |
+| `js/main.js` | Log in, create an account, reset a password, plans and checkout, joining or starting a team, the menu, deleting an account |
+| `js/prefs.js` | Display and accessibility settings |
+| `supabase/functions/` | Server functions: Stripe checkout, billing and webhook, the AI schedule reader, the calendar feed |
 | `js/app.js` | The team app: games, lineup, scoring, stats, roster, subs, board |
 | `js/weather.js` | Game-time forecasts from MET Norway and the rain-out risk rules |
 | `js/market.js` | The Gear marketplace: browse, sell, photos, messages |
@@ -110,7 +164,8 @@ The database enforces all of this, not just the app. See [SECURITY.md](SECURITY.
 ## Ideas for what's next
 
 - Text-message reminders for RSVPs and sub requests (Twilio)
-- Payments for player fees and a paid captain plan (Stripe)
+- Player fees collected through Dugout (Stripe Connect)
+- A real map of diamonds (Leaflet with OpenStreetMap tiles)
 - Gear: featured listings for a small fee, or a shop page for local stores (a natural way for the marketplace to earn)
 - Text or push alerts when a game's forecast turns bad, or when a captain marks a rain-out
 - App Store and Google Play versions (wrap the site with Capacitor)

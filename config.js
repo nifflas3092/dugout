@@ -7,3 +7,8 @@ export const SUPABASE_ANON_KEY = 'sb_publishable_GeIWs5Lhvlufh5IglS8duw_KKfpBkW-
    For heavier use, make a free Mapbox account, paste a public token here and set GEOCODER to 'mapbox'. */
 export const GEOCODER = 'nominatim';
 export const MAPBOX_TOKEN = '';
+
+/* Plans. The prices shown in the app: the real charge is set on the Stripe prices (see README, "Get paid").
+   Players are free. Captains pay monthly to start teams and see the full sub list, and see no ads. Anyone can remove ads with one payment. */
+export const CAPTAIN_PRICE = '$5/month';
+export const ADFREE_PRICE = '$7.99';
