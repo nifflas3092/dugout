@@ -377,7 +377,7 @@ h3 { font: 800 calc(var(--base) * 1.2)/1.15 var(--font-display); text-transform:
 
 /* phone tab bar: floating, five tabs, the current one sits in a green pill */
 nav.tabs { left: 10px; right: 10px; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); border: var(--edge) solid var(--line); border-radius: 24px; box-shadow: 0 10px 30px rgb(15 23 42 / .12); padding: 0 4px; }
-nav.tabs ul.tabs-main { grid-template-columns: repeat(5, 1fr); }
+nav.tabs ul.tabs-main { grid-template-columns: repeat(6, 1fr); }
 nav.tabs .tabs-side { display: none; }
 nav.tabs .tabs-main a { min-height: 64px; font-size: 12px; text-transform: none; letter-spacing: 0; gap: 3px; box-shadow: none; }
 nav.tabs .tabs-main a svg { width: 46px; height: 30px; padding: 3px 11px; border-radius: 999px; transition: background .15s ease; }
@@ -581,3 +581,7 @@ details > summary { cursor: pointer; min-height: 40px; display: flex; align-item
 .team-card .crest { width: 44px; height: 44px; font-size: 18px; }
 .team-card.current { border-color: var(--grass); border-width: 2px; }
 .team-card .btn .ic, .team-card .pill .ic { margin-right: 4px; }
+/* Slowpitch Showdown: the game sits apart from the team tools */
+nav.tabs .tabs-main a.tab-play { color: var(--clay); }
+nav.tabs .tabs-side a.tab-play { color: var(--clay); font-weight: 700; }
+@media (max-width: 380px) { nav.tabs .tabs-main a { font-size: 11px; } nav.tabs .tabs-main a svg { width: 40px; padding: 3px 8px; } }

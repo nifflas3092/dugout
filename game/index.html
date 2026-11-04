@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+<meta name="theme-color" content="#183553">
+<link rel="icon" href="../icons/icon.svg" type="image/svg+xml">
+<title>Slowpitch Showdown · Dugout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800;900&family=Chivo:wght@400;600&family=Chivo+Mono:wght@500;700&display=swap">
+<style>
+/* Layout: one-screen night-game app — hand-turned scoreboard on top, side-on field canvas fills the rest, one hint line under it. Single dark look by choice. */
+:root {
+  color-scheme: dark;
+  --sky: #183553;
+  --board: #1b4a35;
+  --board-edge: #0f2e21;
+  --cream: #f3ead2;
+  --cream-dim: #a9a58f;
+  --lamp: #ffcf6b;
+  --away: #e0574a;
+  --home: #5b8fdc;
+  --red: #e2553f;
+  --ink: #13263b;
+  --font-display: "Big Shoulders Display", "Oswald", "Arial Narrow", Impact, sans-serif;
+  --font-body: "Chivo", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Chivo Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  background: var(--sky);
+  color: var(--cream);
+  font-family: var(--font-body);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 10px 8px;
+  box-sizing: border-box;
+  gap: 8px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+button { font: inherit; color: inherit; }
+button:focus-visible { outline: 2px solid var(--lamp); outline-offset: 2px; }
+
+/* ---------- scoreboard ---------- */
+.board {
+  display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 14px;
+  background: var(--board);
+  border: 3px solid var(--board-edge);
+  border-radius: 6px;
+  padding: 8px 12px;
+  box-shadow: inset 0 0 0 1px rgba(243,234,210,.08);
+}
+.ls-wrap { overflow-x: auto; min-width: 0; flex: 1 1 260px; }
+.ls { border-collapse: collapse; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.ls th, .ls td { padding: 1px 0; width: 26px; text-align: center; }
+.ls th { font-family: var(--font-display); font-weight: 600; font-size: 12px; letter-spacing: .12em; color: var(--cream-dim); }
+.ls td { font-size: 16px; font-weight: 700; }
+.ls td.slot span {
+  display: inline-block; width: 20px; height: 22px; line-height: 22px;
+  background: var(--board-edge); border-radius: 2px;
+}
+.ls td.team { width: auto; text-align: left; padding-right: 10px; font-family: var(--font-display); font-weight: 800; font-size: 18px; letter-spacing: .06em; white-space: nowrap; }
+.ls td.team i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 2px; }
+.ls tr.batting td.team::after { content: " ◂"; color: var(--lamp); font-size: 14px; }
+.ls td.tot span { background: #0a1d16; color: var(--lamp); }
+.ls td.now span { box-shadow: 0 0 0 1px var(--lamp); }
+
+.count { display: grid; grid-template-columns: auto auto; gap: 2px 8px; align-content: center; font-family: var(--font-display); font-weight: 800; font-size: 14px; letter-spacing: .1em; color: var(--cream-dim); }
+.count .lights { display: flex; gap: 5px; align-items: center; }
+.count .lights b { width: 11px; height: 11px; border-radius: 50%; background: var(--board-edge); box-shadow: inset 0 0 0 1px rgba(0,0,0,.4); }
+.count .lights.ball b.on { background: #7fd36b; box-shadow: 0 0 6px #7fd36b; }
+.count .lights.strike b.on { background: var(--lamp); box-shadow: 0 0 6px var(--lamp); }
+.count .lights.out b.on { background: var(--red); box-shadow: 0 0 6px var(--red); }
+
+.diamond { width: 54px; height: 54px; align-self: center; }
+.diamond rect { fill: var(--board-edge); stroke: var(--cream-dim); stroke-width: 1.5; }
+.diamond rect.on { fill: var(--lamp); stroke: var(--lamp); }
+
+.meta { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 92px; }
+.meta .inn { font-family: var(--font-display); font-weight: 800; font-size: 20px; letter-spacing: .05em; }
+.meta .mph { font-family: var(--font-mono); font-size: 12px; color: var(--cream-dim); }
+.tools { display: flex; gap: 6px; align-items: center; margin-left: auto; }
+.tools button {
+  background: var(--board-edge); border: 1px solid rgba(243,234,210,.18); border-radius: 4px;
+  padding: 6px 8px; cursor: pointer; font-family: var(--font-display); font-weight: 600; letter-spacing: .06em; font-size: 13px; text-transform: uppercase;
+}
+.tools button:hover { border-color: var(--lamp); color: var(--lamp); }
+
+/* ---------- stage ---------- */
+.stage { position: relative; flex: 1 1 auto; min-height: 0; border-radius: 6px; overflow: hidden; background: var(--ink); }
+canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+canvas.layer { pointer-events: none; }
+
+.banner {
+  position: absolute; left: 50%; top: 14%; transform: translateX(-50%);
+  font-family: var(--font-display); font-weight: 900; text-transform: uppercase; letter-spacing: .04em;
+  font-size: clamp(26px, 6vw, 64px); line-height: 1; text-align: center; white-space: nowrap;
+  color: var(--cream); text-shadow: 0 3px 0 var(--ink), 0 0 24px rgba(0,0,0,.6);
+  pointer-events: none;
+}
+.banner small { display: block; font-size: .38em; font-weight: 600; letter-spacing: .14em; color: var(--lamp); margin-top: 6px; }
+.banner.small { font-size: clamp(20px, 3.6vw, 36px); }
+.banner.huge { font-size: clamp(40px, 11vw, 128px); color: var(--lamp); }
+.banner.show { animation: pop .38s cubic-bezier(.2,1.6,.4,1) both; }
+@keyframes pop { from { transform: translateX(-50%) scale(.6); opacity: 0; } to { transform: translateX(-50%) scale(1); opacity: 1; } }
+
+.prompt {
+  position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
+  background: rgba(10,15,31,.82); border: 1px solid rgba(255,207,107,.5); border-radius: 999px;
+  padding: 9px 18px; font-family: var(--font-display); font-weight: 800; letter-spacing: .08em; text-transform: uppercase; font-size: 17px;
+  white-space: nowrap; pointer-events: none; max-width: calc(100% - 32px); overflow: hidden; text-overflow: ellipsis;
+}
+.prompt b { color: var(--lamp); font-weight: 900; }
+
+.overlay {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(ellipse at 50% 40%, rgba(24,53,83,.45), rgba(19,38,59,.9));
+  padding: 16px; overflow-y: auto;
+}
+.card {
+  width: min(560px, 100%); display: grid; gap: 16px;
+  background: rgba(19,55,42,.96); border: 3px solid var(--board-edge); border-radius: 8px; padding: 22px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.5);
+}
+.card h1 { margin: 0; font-family: var(--font-display); font-weight: 900; font-size: clamp(40px, 9vw, 64px); line-height: .9; letter-spacing: .01em; text-transform: uppercase; text-wrap: balance; }
+.card h1 em { font-style: normal; color: var(--lamp); }
+.card p { margin: 0; color: var(--cream-dim); line-height: 1.5; font-size: 14px; }
+.label { font-family: var(--font-display); font-weight: 800; letter-spacing: .16em; text-transform: uppercase; font-size: 12px; color: var(--cream-dim); margin-bottom: 6px; }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg button {
+  flex: 1 1 0; min-width: 120px; padding: 10px 12px; border-radius: 4px; cursor: pointer; text-align: left;
+  background: var(--board-edge); border: 1px solid rgba(243,234,210,.15);
+}
+.seg button strong { display: block; font-family: var(--font-display); font-weight: 800; font-size: 18px; letter-spacing: .04em; text-transform: uppercase; }
+.seg button span { font-size: 12px; color: var(--cream-dim); }
+.seg button[aria-pressed="true"] { border-color: var(--lamp); box-shadow: inset 0 0 0 1px var(--lamp); }
+.seg.small button { min-width: 64px; text-align: center; }
+#buildSeg button { flex: 1 1 120px; min-width: 120px; }
+.how { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 520px) { .how { grid-template-columns: 1fr; } }
+.how div { background: rgba(11,36,27,.7); border-radius: 4px; padding: 10px 12px; font-size: 13px; line-height: 1.45; color: var(--cream); min-width: 0; }
+.how div b { display: block; font-family: var(--font-display); font-weight: 800; letter-spacing: .12em; text-transform: uppercase; font-size: 13px; color: var(--lamp); margin-bottom: 2px; }
+.go {
+  background: var(--lamp); color: var(--ink); border: 0; border-radius: 4px; padding: 13px 18px; cursor: pointer;
+  font-family: var(--font-display); font-weight: 900; font-size: 22px; letter-spacing: .08em; text-transform: uppercase;
+}
+.go:hover { filter: brightness(1.08); }
+.go.ghost { background: transparent; color: var(--cream); border: 1px solid rgba(243,234,210,.3); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.row > * { flex: 1 1 160px; }
+.netbox { display: grid; gap: 10px; }
+.joinrow { display: flex; gap: 6px; min-width: 0; }
+.joinrow input { flex: 1 1 0; min-width: 0; background: var(--board-edge); border: 1px solid rgba(243,234,210,.25); border-radius: 4px; color: var(--cream); padding: 10px 12px; font-family: var(--font-mono); font-size: 18px; letter-spacing: .12em; text-transform: uppercase; }
+.joinrow input:focus-visible { outline: 2px solid var(--lamp); outline-offset: 1px; }
+.joinrow .go { flex: 0 0 auto; font-size: 18px; padding: 10px 14px; }
+.codebox { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: rgba(11,36,27,.7); border-radius: 4px; padding: 10px 12px; }
+.codebox .label { margin: 0; }
+.codebox .code { font-family: var(--font-mono); font-weight: 700; font-size: 30px; letter-spacing: .18em; text-transform: uppercase; color: var(--lamp); user-select: all; -webkit-user-select: all; }
+.go.small { font-size: 14px; padding: 6px 12px; margin-left: auto; }
+.go:disabled { opacity: .45; cursor: not-allowed; }
+#netStatus { color: var(--cream); }
+.fine { font-size: 12px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.pstats { display: none; flex: 1 1 260px; align-items: center; gap: 6px 20px; flex-wrap: wrap; font-family: var(--font-display); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; font-size: 13px; color: var(--cream-dim); }
+.pstats b { font-family: var(--font-mono); font-size: 22px; color: var(--lamp); letter-spacing: 0; margin-right: 4px; font-variant-numeric: tabular-nums; }
+body.practice .pstats { display: flex; }
+body.practice .ls-wrap, body.practice .count, body.practice .diamond { display: none; }
+.seg button { min-width: 150px; }
+.final { font-family: var(--font-mono); font-size: 34px; font-weight: 700; color: var(--cream); font-variant-numeric: tabular-nums; }
+
+.hint { font-size: 13px; color: var(--cream-dim); line-height: 1.4; min-height: 1.4em; }
+.hint b { color: var(--cream); font-weight: 600; }
+@media (max-width: 560px) {
+  .meta { min-width: 0; }
+  .hint { font-size: 12px; }
+}
+@media (prefers-reduced-motion: reduce) { .banner.show { animation: none; } }
+.back-dugout { display: inline-block; margin: 0 0 6px; font-size: 14px; color: var(--cream-dim); text-decoration: none; }
+.back-dugout:hover, .back-dugout:focus-visible { color: var(--lamp); text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<header class="board" id="board">
+  <div class="ls-wrap"><table class="ls" id="ls"></table></div>
+  <div class="count" aria-label="Count">
+    <span>B</span><span class="lights ball" id="cB"><b></b><b></b><b></b></span>
+    <span>S</span><span class="lights strike" id="cS"><b></b><b></b></span>
+    <span>O</span><span class="lights out" id="cO"><b></b><b></b></span>
+  </div>
+  <svg class="diamond" viewBox="0 0 54 54" aria-label="Runners on base">
+    <rect id="b2" x="21" y="5" width="12" height="12" transform="rotate(45 27 11)"/>
+    <rect id="b3" x="5" y="21" width="12" height="12" transform="rotate(45 11 27)"/>
+    <rect id="b1" x="37" y="21" width="12" height="12" transform="rotate(45 43 27)"/>
+  </svg>
+  <div class="pstats" id="pstats"></div>
+  <div class="meta"><div class="inn" id="inn">Top 1</div><div class="mph" id="mph">Last pitch —</div></div>
+  <div class="tools">
+    <button id="snd" type="button" aria-pressed="true">Sound on</button>
+    <button id="faceBtn" type="button" title="Show or hide your cartoon bobblehead">Bobblehead on</button>
+    <button id="gfxBtn" type="button" title="Switch between 3D and classic graphics">3D</button>
+    <button id="menuBtn" type="button">Menu</button>
+  </div>
+</header>
+
+<main class="stage" id="stage">
+  <canvas id="cv"></canvas>
+  <div class="banner" id="banner" hidden></div>
+  <div class="prompt" id="prompt" hidden></div>
+
+  <div class="overlay" id="menu">
+    <div class="card">
+      <a class="back-dugout" href="../#home">&larr; Back to Dugout</a>
+      <h1>Slowpitch <em>Showdown</em></h1>
+      <p>Pitcher against batter on a sunny afternoon, slowpitch rules. Lob it in on a 5 to 16 ft arc and land it on the plate or the plywood board for a strike; swing a weighted bat to drive it. The fence is 250 feet out.</p>
+      <div>
+        <div class="label">Mode</div>
+        <div class="seg" id="modeSeg">
+          <button type="button" data-mode="online" aria-pressed="true"><strong>Online 1v1</strong><span>You and a rival, each on your own screen</span></button>
+          <button type="button" data-mode="cpu" aria-pressed="false"><strong>Vs CPU</strong><span>Offline game. You bat first, then pitch</span></button>
+          <button type="button" data-mode="derby" aria-pressed="false"><strong>HR Derby</strong><span>10 outs. Anything but a homer is an out</span></button>
+          <button type="button" data-mode="bullpen" aria-pressed="false"><strong>Bullpen</strong><span>Just you on the mound. Work on your strikes</span></button>
+          <button type="button" data-mode="targets" aria-pressed="false"><strong>HR Targets</strong><span>Derby with bullseyes past the wall. Hit them all before time runs out</span></button>
+        </div>
+      </div>
+      <div id="innBox">
+        <div class="label">Innings</div>
+        <div class="seg small" id="innSeg">
+          <button type="button" data-inn="1" aria-pressed="false"><strong>1</strong></button>
+          <button type="button" data-inn="3" aria-pressed="true"><strong>3</strong></button>
+          <button type="button" data-inn="5" aria-pressed="false"><strong>5</strong></button>
+          <button type="button" data-inn="7" aria-pressed="false"><strong>7</strong></button>
+        </div>
+      </div>
+      <div id="buildBox" hidden>
+        <div class="label">Your hitter</div>
+        <div class="seg small" id="buildSeg">
+          <button type="button" data-build="small"><strong>Small</strong><span>Quick bat, fast legs, less pop</span></button>
+          <button type="button" data-build="normal"><strong>Normal</strong><span>Balanced all round</span></button>
+          <button type="button" data-build="heavy"><strong>Heavy</strong><span>Huge power, slow bat and legs</span></button>
+        </div>
+      </div>
+      <div id="onlinePanel" class="netbox">
+        <div class="row">
+          <button class="go" id="hostBtn" type="button">Create game</button>
+          <div class="joinrow"><label for="codeIn" class="sr">Game code</label><input id="codeIn" type="text" inputmode="text" autocomplete="off" spellcheck="false" maxlength="8" placeholder="Code"><button class="go ghost" id="joinBtn" type="button">Join</button></div>
+        </div>
+        <div class="codebox" id="codeBox" hidden><span class="label">Your code</span><span class="code" id="codeOut"></span><button class="go ghost small" id="copyBtn" type="button">Copy</button></div>
+        <p id="netStatus" role="status"></p>
+        <p class="fine">The creator picks the innings and bats first. You swap between pitching and batting every half inning.</p>
+      </div>
+      <div id="cpuPanel" hidden>
+        <button class="go" id="startBtn" type="button">Play ball</button>
+      </div>
+      <div class="how">
+        <div><b>Pitching</b>Hold the button and the arm follows your mouse: down swings it back, up swings it through, left and right moves the hand. Let go as it comes through. Arm speed is pitch speed; the ring shows where it will land.</div>
+        <div><b>Batting</b>Mouse left and right swings the bat around your body, locked with no lag; up and down sets the height. Move fast to swing hard. A/D and W/S move you around the box. Meet the ball out front as it drops in.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="over" hidden>
+    <div class="card">
+      <div class="label">Final</div>
+      <h1 id="overTitle">P1 wins</h1>
+      <div class="final" id="overScore">5 – 3</div>
+      <p id="overNote"></p>
+      <div class="row">
+        <button class="go" id="rematchBtn" type="button">Rematch</button>
+        <button class="go ghost" id="overMenuBtn" type="button">Change mode</button>
+      </div>
+    </div>
+  </div>
+</main>
+<footer class="hint" id="hint"></footer>
+
+<script src="core.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
