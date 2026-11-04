@@ -1139,7 +1139,7 @@ function leg(hipP, knee, foot, dk, toe, B = DEFAULT_BODY) {
 /* you, as a bobblehead on your batter: your photo cut out and given a glossy painted-resin finish,
    on an oversized head that wobbles on a spring neck. (The cartoon below is the fallback if the image can't load.) */
 const FACE = { on: true, jig: 0, jv: 0, img: null };
-/* the photo bobblehead face is left out of the public site for now; the cartoon face is used instead */
+/* photo face removed; the cartoon face is used */
 try { FACE.on = localStorage.getItem('fpd-toon') !== 'off'; } catch (_) {}
 function drawCaricature(g, r, t) {
   const SK = '#f1c7a4', SKD = '#d9a07c', HAIR = '#8b4a28', INK = '#14161c';

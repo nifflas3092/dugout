@@ -124,6 +124,16 @@ Forecasts come from MET Norway and cover about the next 9 days. They're free to 
 - Buy a domain (about $15 a year) and add it in Vercel under **Settings → Domains**. Then update the URLs from step 2.
 - When you change code, bump `VERSION` in `sw.js` so phones pick up the update.
 
+## Updating Slowpitch Showdown
+
+The game lives in `game/` and opens from the Showdown tab. It's a copy of the single-file game from the game chat, adjusted for the site. To update it with a new version:
+
+```
+python3 tools/sync-game.py path/to/the-new-game.html
+```
+
+The script splits the scripts out (the site's security rules don't run inline scripts), renames it Slowpitch Showdown, adds the Back to Dugout link, starts on Vs CPU, and removes any embedded photo (it stops with an error if a photo is still left). Open `game/` to try it, then commit and push.
+
 ## Who can do what
 
 | | Signed out | Any signed-in user | Player | Captain |
@@ -159,6 +169,7 @@ The database enforces all of this, not just the app. See [SECURITY.md](SECURITY.
 | `supabase/schema.sql` | Tables, security rules, validation, and the actions the app calls |
 | `tests/` | About 90 attacks on the database rules, plus a click-through browser test. See `tests/README.md` |
 | `vercel.json`, `netlify.toml` | Security headers for hosting |
+| `game/`, `tools/sync-game.py` | Slowpitch Showdown, and the script that updates it from the game chat |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Home-screen install and offline loading |
 
 ## Ideas for what's next
