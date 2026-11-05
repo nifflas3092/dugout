@@ -560,7 +560,7 @@ function afterMyLaunch() {
   S.phase = 'waitPlay'; S.hideBall = true;
   net.lastPitchMsg = { gid: S.gid, seq: S.seq + 1, P: S.myPitch };
   net.pitchSentAt = performance.now();
-  net.rm && net.rm.emit('pitch', net.lastPitchMsg).catch(() => {});
+  net.rm && net.rm.emit('pitch', net.lastPitchMsg).catch(netErr);
 }
 function beginFlight() {
   S.phase = 'flight'; S.t = 0; S.tReal = 0; S.rec = []; S.recNext = 0;
@@ -628,6 +628,7 @@ const ordinal = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 > 10 && n % 100 < 14
 const net = { room: null, rm: null, code: null, seat: 0, opp: null, unsub: [], pending: null, lastPlay: null, lastPitchMsg: null, pitchSentAt: 0, behindSince: 0, lastSyncAt: 0, joining: false };
 const round = (v, d = 1000) => Math.round(v * d) / d;
 const roundP = P => ({ p: P.p.map(v => round(v)), v: P.v.map(v => round(v)), spin: (P.spin || [0, 0, 0]).map(v => round(v)), ax: round(P.ax || 0), mph: P.mph, releaseA: round(P.releaseA) });
+function netErr(e) { if (e && (e.code === 'not_permitted' || e.code === 'not_granted') && !net.denied) { net.denied = true; lobbyUI(); hooks.banner('Not connected', 'you need “can contribute” access to play online', ''); } }
 function codeOk(c) { return /^[a-z0-9]{4,8}$/.test(c); }
 function newCode() { const a = 'abcdefghjkmnpqrstuvwxyz23456789'; let s = ''; for (let i = 0; i < 5; i++) s += a[Math.floor(Math.random() * a.length)]; return s; }
 async function joinCode(code, seat) {
@@ -683,7 +684,7 @@ function onRemotePitch(d) {
     if (S.phase === 'waitPitch') startOppWindup(d.P, 0.8);
     else if (!['oppWindup', 'flight', 'batted'].includes(S.phase)) net.pending = d;
   } else if (net.lastPlay && d.seq === net.lastPlay.seq) {
-    net.rm && net.rm.emit('play', net.lastPlay).catch(() => {}); // our answer was lost: say it again
+    net.rm && net.rm.emit('play', net.lastPlay).catch(netErr); // our answer was lost: say it again
   }
 }
 function sendPlay(result) {
@@ -696,7 +697,7 @@ function sendPlay(result) {
   };
   while (JSON.stringify(msg).length > 3900 && msg.rec.length > 8) msg.rec = msg.rec.filter((_, i) => i % 2 === 0);
   net.lastPlay = msg;
-  net.rm && net.rm.emit('play', msg).catch(() => {});
+  net.rm && net.rm.emit('play', msg).catch(netErr);
 }
 function onRemotePlay(d) {
   if (!S || S.mode !== 'online' || !d || d.gid !== S.gid) return;
@@ -735,13 +736,13 @@ function finishRemote() {
 function netTick(now) {
   if (!net.rm || !S || S.mode !== 'online') return;
   if (S.phase === 'waitPlay' && net.lastPitchMsg && now - net.pitchSentAt > 1600) {
-    net.pitchSentAt = now; net.rm.emit('pitch', net.lastPitchMsg).catch(() => {});
+    net.pitchSentAt = now; net.rm.emit('pitch', net.lastPitchMsg).catch(netErr);
   }
   // keep a rival who reloaded or missed a message in step with us
   const o = net.opp && net.opp.presence;
   if (o && S.phase !== 'lobbyWait' && aheadOf(o)) {
     if (!net.behindSince) net.behindSince = now;
-    if (now - net.behindSince > (o.gid ? 2500 : 0) && now - net.lastSyncAt > 1500) { net.lastSyncAt = now; net.rm.emit('sync', { snap: snapshot() }).catch(() => {}); }
+    if (now - net.behindSince > (o.gid ? 2500 : 0) && now - net.lastSyncAt > 1500) { net.lastSyncAt = now; net.rm.emit('sync', { snap: snapshot() }).catch(netErr); }
   } else net.behindSince = 0;
 }
 
@@ -2837,7 +2838,8 @@ function lobbyUI(err) {
   let msg = '';
   if (err) msg = err;
   else if (net.room === undefined) msg = 'Connecting…';
-  else if (!net.room) msg = 'Online 1v1 isn’t switched on in Dugout yet. Play Vs CPU, the HR Derby or practice in the meantime.';
+  else if (!net.room) msg = 'Online play needs you signed in to claude.ai, with this game shared to you by email (Share → invite, at least “can contribute”). Opening it from a public link, or signed out, can’t join a game. Vs CPU works anywhere.';
+  else if (net.denied) msg = 'Your moves aren’t reaching your rival: whoever shared this game needs to give you “can contribute” (or edit) access in the Share menu, then reload.';
   else if (net.joining) msg = 'Opening the game room…';
   else if (net.rm && net.opp) msg = `Rival connected. ${S && S.mode === 'online' ? 'Game on.' : 'Starting…'}`;
   else if (net.rm && net.seat === 0) msg = 'Waiting for your rival to join with this code.';
