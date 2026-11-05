@@ -57,12 +57,13 @@ function subnav(tab) {
   view.insertAdjacentHTML('afterbegin', `<nav class="subnav" aria-label="${({ games: 'Games', team: 'Profile', league: 'League' })[GROUP[tab]]}">${items.map(([k, l]) => `<a href="#${k}"${k === tab ? ' aria-current="page"' : ''}>${l}${k === 'chat' && unread && tab !== 'chat' ? ` <span class="badge" aria-label="${unread} new">${unread}</span>` : ''}</a>`).join('')}</nav>`);
 }
 function render() {
-  const tab = (location.hash || '#home').slice(1);
-  document.querySelectorAll('.tabs-main a').forEach(a => a.setAttribute('aria-current', a.dataset.group === (GROUP[tab] || 'home') ? 'page' : 'false'));
-  document.querySelectorAll('.tabs-side a').forEach(a => a.setAttribute('aria-current', a.dataset.tab === tab || (tab === 'gameday' && a.dataset.tab === 'home') ? 'page' : 'false'));
+  const tab = (location.hash || '#home').slice(1), navTab = tab.startsWith('sub/') ? 'subs' : tab;
+  document.querySelectorAll('.tabs-main a').forEach(a => a.setAttribute('aria-current', a.dataset.group === (GROUP[navTab] || 'home') ? 'page' : 'false'));
+  document.querySelectorAll('.tabs-side a').forEach(a => a.setAttribute('aria-current', a.dataset.tab === navTab || (navTab === 'gameday' && a.dataset.tab === 'home') ? 'page' : 'false'));
   header();
   if (!st.loaded.team && !st.offline) { view.innerHTML = `<div class="empty">Loading your team…</div>`; return; }
   if (tab === 'subs' && (st.loaded.team || st.offline)) { renderSubs(); subnav(tab); return; }
+  if (tab.startsWith('sub/') && (st.loaded.team || st.offline)) { renderSubProfile(decodeURIComponent(tab.slice(4))); return; }
   if (tab === 'diamonds' && (st.loaded.team || st.offline)) { renderDiamonds(); subnav(tab); houseAd(); return; }
   if (tab === 'gear' && (st.loaded.team || st.offline)) { const r = renderGear(gearCtx()); houseAd(); return r; }
   if (NOTEAM) { if (tab === 'teams') renderTeams(); else renderNoTeam(tab); subnav(tab); houseAd(); return; }
@@ -1001,7 +1002,7 @@ function renderFind() {
   </aside>
   <section class="results" aria-label="Matching subs">
     <p class="muted small" aria-live="polite" style="margin:0 0 10px">${list.length} ${list.length === 1 ? 'player' : 'players'}${from ? ` within ${F.km} km of ${esc(from.name || from.label)}` : ''}${!st.agents.length ? '' : ` of ${st.agents.length} on the list`}</p>
-    <div class="stack">${list.length ? list.map(({ a, d }) => agentCard(a, d)).join('') : `<div class="panel empty">${st.agents.length ? 'No one matches these filters. Try widening the distance or clearing a filter.' : 'No one has signed up to sub yet. Share Dugout with players and point them to <b>Sign up to sub</b>.'}</div>`}</div>
+    <div class="sub-rows">${list.length ? list.map(({ a, d }) => agentRow(a, d)).join('') : `<div class="panel empty">${st.agents.length ? 'No one matches these filters. Try widening the distance or clearing a filter.' : 'No one has signed up to sub yet. Share Dugout with players and point them to <b>Sign up to sub</b>.'}</div>`}</div>
   </section></div>`;
   const det = document.getElementById('filtDet'); det.addEventListener('toggle', () => LS.set('filtOpen', det.open));
   const upd = (k, v) => { F[k] = v; saveF(); renderFind(); };
@@ -1026,6 +1027,25 @@ function renderFind() {
     } catch (_) { toast('Couldn’t place that. Try a park name with the city, a postal code, or coordinates like 43.66, -79.42'); b.disabled = false; b.textContent = st.canEdit ? 'Add' : 'Use'; }
   });
   box.querySelectorAll('[data-ask]').forEach(b => b.addEventListener('click', () => askForm(b)));
+}
+// one line per sub: tap for their full profile
+function agentRow(a, d) {
+  const g = (GENDERS.find(x => x[0] === a.gender) || [, ''])[1], sent = st.invites.filter(i => i.agent === a.id).sort((x, y) => y.at - x.at)[0];
+  const far = d != null && a.radius && d > a.radius;
+  return `<a class="sub-row" href="#sub/${esc(a.id)}" aria-label="${esc(a.name)}, open profile">
+    <span class="crest avatar sub-av" aria-hidden="true">${esc((a.name || '?').trim().slice(0, 1).toUpperCase())}${st.online.has(a.id) ? '<span class="online-dot on-avatar"></span>' : ''}</span>
+    <span class="sub-main"><span class="sub-name"><b>${esc(a.name)}</b>${a.id === myId ? ' <span class="muted small">(you)</span>' : ''}</span>
+      <span class="muted small">${[SKILL[a.skill] || '', a.gender ? g : '', (a.pos || []).slice(0, 3).join(' '), a.active ? '' : 'not available'].filter(Boolean).map(esc).join(' · ')}</span></span>
+    ${sent ? `<span class="pill ${sent.status === 'accepted' ? 'in' : sent.status === 'declined' ? 'out' : 'maybe'} small">${sent.status === 'accepted' ? 'Yes' : sent.status === 'declined' ? 'No' : 'Asked'}</span>` : ''}
+    ${d != null ? `<span class="sub-km${far ? ' far' : ''}">${d < 1 ? '<1' : Math.round(d)} km</span>` : ''}
+    <span class="sub-chev" aria-hidden="true">›</span></a>`;
+}
+// a sub's full profile (League → Subs → tap a name)
+function renderSubProfile(id) {
+  const a = st.agents.find(x => x.id === id), from = fromPoint();
+  view.innerHTML = `<a class="btn ghost small" href="#subs" style="margin:6px 0 12px">← All subs</a>
+    ${a ? agentCard(a, from && a.lat != null ? km(from, a) : null) : '<div class="panel empty">This sub isn’t on the list any more.</div>'}`;
+  view.querySelectorAll('[data-ask]').forEach(b => b.addEventListener('click', () => askForm(b)));
 }
 function agentCard(a, d) {
   const sent = st.invites.filter(i => i.agent === a.id).sort((x, y) => y.at - x.at)[0];
