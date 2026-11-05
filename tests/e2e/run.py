@@ -6,6 +6,7 @@ import os
 HERE=os.path.dirname(os.path.abspath(__file__)); APP=os.path.abspath(os.path.join(HERE,'..','..')); FAKE=open(os.path.join(HERE,'fake-supabase.js')).read(); OUT=os.path.join(HERE,'screenshots')+'/'; os.makedirs(OUT,exist_ok=True)
 CFG="export const SUPABASE_URL='https://fake.supabase.co';export const SUPABASE_ANON_KEY='x';export const GEOCODER='nominatim';export const MAPBOX_TOKEN='';export const CAPTAIN_PRICE='$5/month';export const ADFREE_PRICE='$7.99';export const GOOGLE_MAPS_KEY='';"
 INDEX=re.sub(r' integrity="[^"]+"','',open(APP+'/index.html').read())
+GAME=re.sub(r' integrity="[^"]+"','',open(APP+'/game/index.html').read())
 ADMIN=re.sub(r' integrity="[^"]+"','',open(APP+'/admin.html').read())  # the test double can't match the real library's hash
 srv=subprocess.Popen([sys.executable,'-m','http.server','8766','-d',APP],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 errs=[]; checks=[]
@@ -28,6 +29,7 @@ async def setup(ctx):
   await ctx.route('https://cdn.jsdelivr.net/**', lambda r: r.fulfill(body=FAKE, content_type='application/javascript'))
   await ctx.route('**/config.js', lambda r: r.fulfill(body=CFG, content_type='application/javascript'))
   await ctx.route(re.compile(r'http://localhost:8766/(index\.html)?(\?.*)?$'), lambda r: r.fulfill(body=INDEX, content_type='text/html'))
+  await ctx.route(re.compile(r'http://localhost:8766/game/(index\.html)?(\?.*)?$'), lambda r: r.fulfill(body=GAME, content_type='text/html'))
   await ctx.route(re.compile(r'http://localhost:8766/admin\.html(\?.*)?(#.*)?$'), lambda r: r.fulfill(body=ADMIN, content_type='text/html'))
   await ctx.route('https://nominatim.openstreetmap.org/**', lambda r: r.fulfill(body=json.dumps([{"lat":"43.65","lon":"-79.51","name":"Etobicoke","address":{"suburb":"Etobicoke","city":"Toronto","state":"Ontario"},"display_name":"Etobicoke, Toronto"}]), content_type='application/json'))
   await ctx.route('https://fonts.**', lambda r: r.abort())
@@ -384,6 +386,18 @@ async def main():
       await cap.set_viewport_size({'width':w,'height':h}); await cap.goto('http://localhost:8766/#home'); await cap.wait_for_timeout(700)
       await cap.screenshot(path=OUT+f'v10_desk_{w}.png')
     await cap.set_viewport_size({'width':1280,'height':860})
+    # ---- Slowpitch Showdown: ranked play and the leaderboard use the Dugout sign-in
+    await cap.evaluate("(()=>{const d=JSON.parse(localStorage.getItem('fake-sb-db'));d.ranked=[{id:'gx',user:'u-x',done:true,won:true,k:5,hr:1}];d.profiles.push({id:'u-x',display_name:'Robin'});localStorage.setItem('fake-sb-db',JSON.stringify(d))})()")
+    await cap.goto('http://localhost:8766/game/'); await cap.wait_for_selector('#modeSeg'); await cap.click('[data-mode="cpu"]'); await cap.wait_for_timeout(600)
+    check('Showdown offers Ranked to a signed-in player in Vs CPU', await cap.is_visible('#rankBox'))
+    await cap.click('[data-mode="derby"]'); check('...but not in the derby', not await cap.is_visible('#rankBox'))
+    await cap.click('#lbBtn'); await cap.wait_for_selector('#lbList li'); t=await cap.inner_text('#lbOverlay')
+    check('leaderboard lists ranked players by wins', 'Robin' in t and 'wins' in t.lower())
+    await cap.click('[data-stat="strikeouts"]'); await cap.wait_for_timeout(300); check('...and by strikeouts', '5' in await cap.inner_text('#lbList'))
+    await cap.screenshot(path=OUT+'v12_leaderboard.png'); await cap.click('#lbClose')
+    gid=await cap.evaluate("SHOWDOWN_NET.start()"); await cap.evaluate(f"SHOWDOWN_NET.finish('{gid}',{{won:true,strikeouts:3,home_runs:2,runs_for:6,runs_against:2}})")
+    await cap.click('#lbBtn'); await cap.click('[data-stat="home_runs"]'); await cap.wait_for_timeout(400)
+    check('a finished ranked game shows up with you highlighted', await cap.locator('#lbList li.me').count()==1)
     csp=[e for e in errs if 'Content Security Policy' in e or 'Refused' in e]
     check('no Content Security Policy violations', not csp)
     print('ERRORS', errs)

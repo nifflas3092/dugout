@@ -20,6 +20,7 @@ Team app for rec league slowpitch:
 - **Team chat**: live chat for each team, with unread counts
 - **Online now**: captains see a green light on subs who have Dugout open (subs can switch it off)
 - **AI schedule import**: paste a link to the league's schedule (web page, PDF, calendar or text). Claude reads it, finds your games and diamonds, and you confirm before they're added
+- **Slowpitch Showdown**: the built-in game (bottom tab). Vs CPU, HR Derby, Bullpen, HR Targets and a Rogue-lite mode, with weather and a Hampton Park field. Signed-in players can turn on **Ranked** for Vs CPU games, which count on a leaderboard for most wins, strikeouts and home runs
 - **Calendar sync**: a private link that puts every game from all your teams in Google, Apple or Outlook Calendar, with the diamond's address and a map link. It updates itself
 - **Diamonds**: every park and diamond the league uses, nearest first, with Google Maps directions
 

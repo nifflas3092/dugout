@@ -8,6 +8,7 @@ Takes the single-file game (as it comes from the game chat or its published page
   * game/index.html  the page, with the site's head, title and a "Back to Dugout" link
   * game/core.js     the rules and physics script
   * game/game.js     the drawing, input and game-flow script
+(game/ranked.js, ranked play and the leaderboard, belongs to the site and is left alone.)
 The scripts are split out because the site's security rules (Content-Security-Policy) don't run inline scripts.
 
 It also makes the site-only changes every time, so nothing is missed:
@@ -29,10 +30,15 @@ HEAD = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co; object-src 'none'; base-uri 'none'; form-action 'self'">
 <meta name="theme-color" content="#183553">
 <link rel="icon" href="../icons/icon.svg" type="image/svg+xml">
 <title>Slowpitch Showdown · Dugout</title>"""
+
+# ranked play and the leaderboard: Supabase (same version and checksum as the app) plus game/ranked.js, which is the site's own file
+SITE_SCRIPTS = ('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" '
+                'integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>\n'
+                '<script type="module" src="ranked.js"></script>')
 
 BACK_CSS = """.back-dugout { display: inline-block; margin: 0 0 6px; font-size: 14px; color: var(--cream-dim); text-decoration: none; }
 .back-dugout:hover, .back-dugout:focus-visible { color: var(--lamp); text-decoration: underline; }
@@ -75,7 +81,7 @@ def main():
     if not m_app:
         fail('could not find the main game <script>')
     core, app = m_core.group(1), m_app.group(1)
-    markup = src[:m_core.start()] + '<script src="core.js"></script>\n<script src="game.js"></script>' + rest[m_app.end():]
+    markup = src[:m_core.start()] + '<script src="core.js"></script>\n<script src="game.js"></script>\n' + SITE_SCRIPTS + rest[m_app.end():]
     if re.search(r'<script(?![^>]*\bsrc=)[^>]*>', markup):
         fail('the game has another inline <script>; the site cannot run it')
 

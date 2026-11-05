@@ -3,7 +3,11 @@
 /* =================== CORE: 3D physics + rules (no DOM) =================== */
 /* World: feet. Origin = point of home plate. +z toward the pitcher / center field, +x toward first base, +y up. */
 const G = 32.17, DRAG = 0.002, TS_PITCH = 0.7, D2R = Math.PI / 180; // pitches play out at 70% speed: same path, more hang time
-const PLATE_Z = 0.71, MOUND_Z = 50, FENCE_R = 250, FENCE_H = 10;
+const PLATE_Z = 0.71, MOUND_Z = 50, FENCE_R = 250;
+let FENCE_H = 10; // the park sets this (Hampton Park's chain-link is lower)
+/* weather and run modifiers, set by the app: wind pushes the ball (ft/s^2), a wet field kills the bounce,
+   and the rogue-lite perks scale the hitting window, power and pitch speed */
+const WIND = { x: 0, z: 0 }, FIELD = { wet: 0 }, MODS = { hitR: 1, power: 1, ts: 1 };
 const ZONE = { lo: 1.5, hi: 3.6, half: 0.71, mid: 2.55 };
 /* Slowpitch: a taken pitch is a strike only if it lands on the plate or the mat behind it, and the arc must peak 6-12 ft. */
 const MAT = { half: 1.42, z0: -0.63, z1: 3.63 }; // a plywood strike board twice the old size, lined up with the batter's boxes
@@ -58,7 +62,7 @@ function surfAt(x, z) {
 }
 
 let S = null;
-const PRACTICE = m => m === 'derby' || m === 'bullpen' || m === 'targets';
+const PRACTICE = m => m === 'derby' || m === 'bullpen' || m === 'targets' || m === 'rogue';
 function teamName(t) { return S.mode === 'online' ? (t === S.mySeat ? 'YOU' : 'RIVAL') : (t === 0 ? 'YOU' : 'CPU'); }
 function battingTeam() { return S.half; }
 function fieldingTeam() { return 1 - S.half; }
@@ -80,6 +84,8 @@ function newGame(mode, innings, seat = 0, gid = null, started = 0) {
     fielders: FIELDERS.map(f => { const b = FIELD_BUILDS[f.id], sp = f.spd * BUILDS[b].range; return { ...f, base: f.home, build: b, spd: sp, x: f.home[0], z: f.home[1], run: 0 }; }),
     holding: false, handoff: null, mark: null,
   };
+  Object.assign(MODS, { hitR: 1, power: 1, ts: 1 });
+  if (UI.newGame) UI.newGame();
   resetPitch();
 }
 
@@ -88,7 +94,9 @@ function resetPitch() {
   Object.assign(b, { vx: 0, vy: 0, vz: 0, ax: 0, spin: [0, 0, 0], held: undefined, thrown: null });
   S.trail = [];
   S.inHand = true; S.contacted = false; S.caughtByCatcher = false; S.swung = false;
-  S.atPlate = null; S.land = null; S.apex = 0; S.t = 0; S.tReal = 0; S.ts = TS_PITCH;
+  S.atPlate = null; S.atBat = null; S.contactInfo = null; S.land = null; S.apex = 0; S.t = 0; S.tReal = 0; S.ts = TS_PITCH * MODS.ts;
+  S.twist = 0; S.knocked = false;
+  if (!humanPitches()) S.lean = 0;
   S.cpuPlan = null; S.batted = null; S.mark = null; S.replay = null; S.rec = []; S.contactRec = null; S.hideBall = false;
   S.arm.a = -90 * D2R; S.arm.w = 0; S.oppStride = 0; S.strideNow = 0; resetHand();
   const bt = S.bat;
@@ -107,7 +115,8 @@ function resetPitch() {
 function handPos() {
   if (S.freeHand) return pendHand();
   const h = armHandAt(S.arm.a), st = S.strideNow || 0, lat = S.hold ? S.hold.lat : 0; // the arm rides along with the stride
-  return [h[0] - lat, h[1] - 0.25 * st, h[2] - 1.4 * st];
+  const lean = S.lean || 0; // A/D: the pitcher leans left (+x, toward first) or right, and lets go from out there
+  return [h[0] - lat + LEAN.x * lean, h[1] - 0.25 * st - LEAN.drop * Math.abs(lean), h[2] - 1.4 * st];
 }
 function batDir(phi, e) { const ce = Math.cos(e); return [ce * Math.cos(phi), Math.sin(e), ce * Math.sin(phi)]; }
 
@@ -129,9 +138,9 @@ const KM = 0.0045; // Magnus strength: extra acceleration per (rad/s of spin x f
 function ballAccel(b) {
   const sp = Math.hypot(b.vx, b.vy, b.vz), s = b.spin || [0, 0, 0];
   return [
-    -DRAG * sp * b.vx + KM * (s[1] * b.vz - s[2] * b.vy) + (b.ax || 0),
+    -DRAG * sp * b.vx + KM * (s[1] * b.vz - s[2] * b.vy) + (b.ax || 0) + WIND.x,
     -G - DRAG * sp * b.vy + KM * (s[2] * b.vx - s[0] * b.vz),
-    -DRAG * sp * b.vz + KM * (s[0] * b.vy - s[1] * b.vx),
+    -DRAG * sp * b.vz + KM * (s[0] * b.vy - s[1] * b.vx) + WIND.z,
   ];
 }
 /* Fly a pitch (no bat, no ground) until it reaches depth zEnd. */
@@ -188,6 +197,8 @@ function cpuPickPitch() {
    Let go whenever: the pitch takes its speed from how fast the arm is really swinging (smoothed over the last
    ~0.1 s so small jitters don't matter), its arc from where in the swing you let go, and its aim from the hand. ---------- */
 const FLICK = { stride: 1.4, releaseA: -125 * D2R };
+const LEAN = { x: 1.1, drop: 0.25, yaw: 0.024 };   // how far a full lean moves the hand, and how much it angles the pitch back across
+const TWIST = { spin: 8 };                           // full wrist twist: sidespin (rad/s) for about 2 ft of curve
 const ARMC = { kp: 420, kd: 38, amax: 1100, latMax: 0.9, speedMid: 41.5, speedSpread: 8, handMid: 18, handSoft: 11, minHand: 10 };
 const YAW0 = (() => { const h = armHandAt(-115 * D2R); return Math.atan2(-h[0], h[2] - FLICK.stride - PLATE_Z); })();
 const PFWD = [Math.sin(YAW0), 0, -Math.cos(YAW0)];
@@ -213,10 +224,11 @@ function pitchFromArm() {
   const speed = ARMC.speedMid + ARMC.speedSpread * Math.tanh((hand - ARMC.handMid) / ARMC.handSoft);
   const past = -90 - S.arm.a / D2R; // degrees past the bottom of the swing
   const elev = clamp(36 + 0.35 * past, 28, 52) * D2R; // later release = a bit more arc, within a sane range
-  const yaw = YAW0 - h.lat * 0.035 - latv * 0.012;
+  const yaw = YAW0 - h.lat * 0.035 - latv * 0.012 - (S.lean || 0) * LEAN.yaw; // from a lean, it comes back across on an angle
   const f = [Math.sin(yaw), 0, -Math.cos(yaw)];
   const v = [f[0] * speed * Math.cos(elev), speed * Math.sin(elev), f[2] * speed * Math.cos(elev)];
-  return { p: handPos(), v, spin: [4, clamp(-latv * 0.8, -6, 6), 0], ax: 0, releaseA: S.arm.a, mph: Math.round(speed * 0.6818), speed };
+  // wrist twist (right button + wheel): + curves out (toward first base), - curves in
+  return { p: handPos(), v, spin: [4, clamp(-latv * 0.8, -6, 6) - (S.twist || 0) * TWIST.spin, 0], ax: 0, releaseA: S.arm.a, mph: Math.round(speed * 0.6818), speed, twist: S.twist || 0, lean: S.lean || 0 };
 }
 /* ---------- the bat: hands follow the mouse, bat is a pendulum hanging off the hands ---------- */
 /* The bat is a weighted object pulled toward where the mouse says it should be (a stiff spring with damping
@@ -318,7 +330,9 @@ function stepFlight(dt, script) {
     b.x += b.vx * hs; b.y += b.vy * hs; b.z += b.vz * hs;
     if (b.y < BALL_R && b.vy < 0) { b.y = BALL_R; b.vy = -b.vy * 0.35; b.vx *= 0.6; b.vz *= 0.6; b.spin = [0, 0, 0]; }
     if (zPrev > PLATE_Z && b.z <= PLATE_Z && !S.atPlate) S.atPlate = { x: b.x, y: b.y };
-    if (!S.contacted) { S.apex = Math.max(S.apex, b.y); if (!S.land && b.y <= BALL_R + 0.01) S.land = { x: b.x, z: b.z }; }
+    const zBat = bt.bz + 0.3; // where a hitter meets it: just out in front of him
+    if (zPrev > zBat && b.z <= zBat && !S.atBat) S.atBat = { phi: bt.phi, w: bt.w, ballY: b.y, barrelY: bt.hy + Math.sin(bt.e) * BAT.L * 0.74 };
+    if (!S.contacted) { S.apex = Math.max(S.apex, b.y); if (!S.land && b.y <= BALL_R + 0.01) { S.land = { x: b.x, z: b.z }; if (!S.knocked) { S.knocked = true; UI.sound(onMat(b.x, b.z) ? 'knock' : 'thud'); } } }
     if (human) {
       bt.hy = from[1] + (toY - from[1]) * i / N;
       stepBatPhys(h);
@@ -345,7 +359,7 @@ function tryContact() {
   let n = [b.x - c[0], b.y - c[1], b.z - c[2]];
   const dist = Math.hypot(...n);
   // swinging out of your shoes costs control: the harder the swing, the smaller the window you can square it up in
-  const ctl = 1 - 0.4 * clamp((Math.abs(bt.w) - 28) / 30, 0, 1), hr = HIT_R * ctl, hyW = HIT_Y * ctl;
+  const ctl = 1 - 0.4 * clamp((Math.abs(bt.w) - 28) / 30, 0, 1), hr = HIT_R * ctl * MODS.hitR, hyW = HIT_Y * ctl * MODS.hitR;
   if ((n[0] ** 2 + n[2] ** 2) / hr ** 2 + n[1] ** 2 / hyW ** 2 > 1) return false;
   if (dist < 1e-4) n = [0, 1, 0]; else n = n.map(v => v / dist);
   const ce = Math.cos(bt.e);
@@ -365,9 +379,10 @@ function tryContact() {
   const off = clamp((ov[1] - od * ru[1]) / hyW, -1, 1); // -1 = ball at the bottom of the window (bat under it would be +), 0 = dead center
   const square = 1 - 0.35 * Math.pow(Math.abs(off), 1.5);
   out.forEach((v, k) => out[k] = v * square);
-  const pw = BB().power; // the heavy build hits it harder, the small build a bit softer
+  S.contactInfo = { phi: bt.phi, off };
+  const pw = BB().power * MODS.power; // the heavy build hits it harder, the small build a bit softer
   out.forEach((v, k) => out[k] = v * pw);
-  const sp3 = Math.hypot(...out), cap = 160 * Math.sqrt(pw);
+  const sp3 = Math.hypot(...out), cap = 160 * Math.sqrt(pw) * (MODS.power > 1 ? 1.04 : 1);
   if (sp3 > cap) out.forEach((v, k) => out[k] = v * cap / sp3);
   // playability: real timing windows are a few milliseconds, so pull spray and launch angles toward the middle
   {
@@ -398,6 +413,7 @@ function predictBatted() {
   while (t < 9) {
     const s = Math.hypot(vx, vy, vz);
     vx -= DRAG * s * vx * dt; vy -= (G + DRAG * s * vy) * dt; vz -= DRAG * s * vz * dt;
+    if (y > 1) { vx += WIND.x * dt; vz += WIND.z * dt; } // the wind carries a ball in the air
     const rPrev = hyp(x, z);
     x += vx * dt; y += vy * dt; z += vz * dt; t += dt;
     const r = hyp(x, z);
@@ -410,9 +426,9 @@ function predictBatted() {
     if (y <= BALL_R && vy < 0) {
       y = BALL_R;
       if (!land) land = { t, x, z };
-      const sf = surfAt(x, z);
-      if (vy < -4) { vy = -vy * sf.up; vx *= sf.keep; vz *= sf.keep; }
-      else { vy = 0; const f = Math.max(0, 1 - sf.roll * dt); vx *= f; vz *= f; }
+      const sf = surfAt(x, z), wet = FIELD.wet;
+      if (vy < -4) { vy = -vy * sf.up * (1 - 0.3 * wet); vx *= sf.keep * (1 - 0.12 * wet); vz *= sf.keep * (1 - 0.12 * wet); } // a wet field: dead bounces
+      else { vy = 0; const f = Math.max(0, 1 - sf.roll * (1 + 1.5 * wet) * dt); vx *= f; vz *= f; }
     }
     if (t >= nextSample) { path.push({ t, x, y, z }); nextSample += 1 / 30; }
     if (land && Math.hypot(vx, vz) < 1.5) break;
@@ -710,7 +726,7 @@ function applyPitchCall() {
   const words = ['', 'one', 'two', 'three'];
   if (strike) {
     S.strikes++;
-    if (S.strikes >= 3) { endPA(); recordOut(); return { text: 'Strikeout', sub: S.swung ? 'swinging' : 'on the mat', size: '' }; }
+    if (S.strikes >= 3) { if (fieldingTeam() === mySeat()) S.myK = (S.myK || 0) + 1; endPA(); recordOut(); return { text: 'Strikeout', sub: S.swung ? 'swinging' : 'on the mat', size: '' }; }
     return { text: `Strike ${words[S.strikes]}`, sub: S.swung ? 'swinging' : 'on the mat', size: 'small' };
   }
   S.balls++;
@@ -742,6 +758,7 @@ function applyBattedOutcome(out) {
   }
   const n = { single: 1, double: 2, triple: 3, hr: 4 }[out.type];
   S.hits[bt]++;
+  if (out.type === 'hr' && bt === mySeat()) S.myHR = (S.myHR || 0) + 1;
   const r = advance(n);
   addRuns(r);
   if (out.type === 'hr') return { text: r > 3 ? 'Grand slam!' : 'Home run!', sub: `${Math.round(hrDistance())} ft · ${r} run${r > 1 ? 's' : ''}`, size: 'huge' };

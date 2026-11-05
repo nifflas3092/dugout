@@ -144,6 +144,11 @@ function createClient() {
         if (name === 'admin_user_summary') return { data: { name: pname(a.p_user), joined: new Date().toISOString(), listings: d.docs.filter(x => x.col === 'listings' && x.owner === a.p_user).length, removed: 0, reportsAgainst: 1, banned: null }, error: null };
       }
       if (name === 'create_team' && !paid(d, ME().id)) return { data: null, error: { code: 'P0001', message: 'Starting a team is a captain feature. Upgrade to captain first.' } };
+      if (name === 'ranked_start') { d.ranked = d.ranked || []; const id = 'g' + rid(); d.ranked.push({ id, user: ME().id, at: Date.now() }); save(d); return { data: id, error: null }; }
+      if (name === 'ranked_finish') { const g = (d.ranked || []).find(x => x.id === a.p_game && x.user === ME().id); if (!g || g.done) return { data: null, error: { message: 'no such ranked game' } }; Object.assign(g, { done: true, won: a.p_won, k: a.p_strikeouts, hr: a.p_home_runs }); save(d); return { data: null, error: null }; }
+      if (name === 'game_leaderboard') { const by = {}; (d.ranked || []).filter(g => g.done).forEach(g => { const t = by[g.user] = by[g.user] || { wins: 0, strikeouts: 0, home_runs: 0, games: 0 }; t.games++; t.wins += g.won ? 1 : 0; t.strikeouts += g.k; t.home_runs += g.hr; });
+        const rows = Object.entries(by).map(([u, t]) => ({ name: (d.profiles.find(p => p.id === u) || {}).display_name || 'Player', value: t[a.p_stat], games: t.games, me: u === ME().id })).filter(r => r.value > 0).sort((x, y) => y.value - x.value);
+        return { data: rows.map((r, i) => ({ rank: i + 1, ...r })), error: null }; }
       if (name === 'i_am_here') { d.seen[ME().id] = Date.now(); save(d); return { data: null, error: null }; }
       if (name === 'online_subs') return { data: paid(d, ME().id) ? d.docs.filter(x => x.col === 'agents' && !x.data.hideOnline && Date.now() - (d.seen[x.id] || 0) < 180000).map(x => x.id) : [], error: null };
       if (name === 'reset_cal_token') { const t = 'd'.repeat(64); acct(d, ME().id).cal_token = t; save(d); return { data: t, error: null }; }

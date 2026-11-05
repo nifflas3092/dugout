@@ -953,6 +953,70 @@ begin
     'banned', (select jsonb_build_object('reason', reason, 'until', until) from public.market_bans where user_id = p_user and (until is null or until > now())));
 end $$;
 
+-- ---------- Slowpitch Showdown: ranked games and the leaderboard ----------
+-- A ranked game is opened on the server first (so it has a server start time), then closed with its result.
+-- The result still comes from the player's browser, so it is checked for sense, not proven: see SECURITY.md.
+create table if not exists public.ranked_games (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users on delete cascade,
+  started_at timestamptz not null default now(),
+  finished_at timestamptz,
+  won boolean,
+  strikeouts int check (strikeouts between 0 and 9),
+  home_runs int check (home_runs between 0 and 25),
+  runs_for int check (runs_for between 0 and 60),
+  runs_against int check (runs_against between 0 and 60)
+);
+create index if not exists ranked_games_user on public.ranked_games (user_id, started_at desc);
+alter table public.ranked_games enable row level security;
+drop policy if exists "ranked: see own" on public.ranked_games;
+create policy "ranked: see own" on public.ranked_games for select to authenticated using (user_id = (select auth.uid()));
+
+create or replace function public.ranked_start() returns uuid
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := (select auth.uid()); gid uuid;
+begin
+  if me is null then raise exception 'sign in to play ranked'; end if;
+  if (select count(*) from public.ranked_games where user_id = me and started_at > now() - interval '1 day') >= 40 then
+    raise exception 'that''s 40 ranked games today: come back tomorrow';
+  end if;
+  insert into public.ranked_games (user_id) values (me) returning id into gid;
+  return gid;
+end $$;
+
+create or replace function public.ranked_finish(p_game uuid, p_won boolean, p_strikeouts int, p_home_runs int, p_runs_for int, p_runs_against int) returns void
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := (select auth.uid()); g public.ranked_games;
+begin
+  select * into g from public.ranked_games where id = p_game and user_id = me for update;
+  if not found then raise exception 'no such ranked game'; end if;
+  if g.finished_at is not null then raise exception 'that game is already in'; end if;
+  if now() - g.started_at < interval '2 minutes' then raise exception 'that game was too quick to count'; end if;
+  if now() - g.started_at > interval '4 hours' then raise exception 'that game ran too long to count'; end if;
+  if p_strikeouts not between 0 and 9 or p_home_runs not between 0 and 25 or p_runs_for not between 0 and 60 or p_runs_against not between 0 and 60
+     or p_won is distinct from (p_runs_for > p_runs_against) or p_runs_for = p_runs_against or p_home_runs > p_runs_for then
+    raise exception 'that result doesn''t add up';
+  end if;
+  update public.ranked_games set finished_at = now(), won = p_won, strikeouts = p_strikeouts, home_runs = p_home_runs,
+    runs_for = p_runs_for, runs_against = p_runs_against where id = p_game;
+end $$;
+
+-- top 25 for one stat: wins, strikeouts or home_runs (display names only)
+create or replace function public.game_leaderboard(p_stat text) returns table (rank bigint, name text, value bigint, games bigint, me boolean)
+language sql stable security definer set search_path = '' as $$
+  with t as (
+    select g.user_id,
+           count(*) filter (where g.won) as wins, coalesce(sum(g.strikeouts), 0) as strikeouts, coalesce(sum(g.home_runs), 0) as home_runs, count(*) as games
+    from public.ranked_games g where g.finished_at is not null group by g.user_id
+  ), v as (
+    select t.user_id, case p_stat when 'wins' then t.wins when 'strikeouts' then t.strikeouts when 'home_runs' then t.home_runs end as value, t.games from t
+  )
+  select rank() over (order by v.value desc), coalesce(nullif(p.display_name, ''), 'Player'), v.value, v.games, v.user_id = (select auth.uid())
+  from v left join public.profiles p on p.id = v.user_id
+  where p_stat in ('wins', 'strikeouts', 'home_runs') and v.value > 0
+  order by v.value desc, v.games asc limit 25;
+$$;
+
 -- nobody signed out can call any of these; signed-in users can call only the app's actions
 revoke execute on all functions in schema public from public, anon;
 grant execute on function public.create_team(text), public.join_team(text), public.reset_join_code(uuid),
@@ -965,6 +1029,7 @@ grant execute on function public.is_admin(), public.is_market_banned(), public.a
 grant execute on function public.is_paid_captain() to authenticated;
 grant execute on function public.is_member(text), public.is_captain(text), public.is_any_captain(), public.shares_team(uuid),
   public.contact_unlocked(text), public.owns_player(text, text), public.in_thread(text) to authenticated;
+grant execute on function public.ranked_start(), public.ranked_finish(uuid, boolean, int, int, int, int), public.game_leaderboard(text) to authenticated;
 alter default privileges in schema public revoke execute on functions from public, anon;
 
 -- listing photos: anyone can view them (they're on public listings); people can only add or remove files in their own folder.

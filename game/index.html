@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co; object-src 'none'; base-uri 'none'; form-action 'self'">
 <meta name="theme-color" content="#183553">
 <link rel="icon" href="../icons/icon.svg" type="image/svg+xml">
 <title>Slowpitch Showdown · Dugout</title>
@@ -118,6 +118,10 @@ canvas.layer { pointer-events: none; }
   white-space: nowrap; pointer-events: none; max-width: calc(100% - 32px); overflow: hidden; text-overflow: ellipsis;
 }
 .prompt b { color: var(--lamp); font-weight: 900; }
+.swingfb { position: absolute; left: 50%; bottom: 70px; transform: translateX(-50%); padding: 7px 16px; border-radius: 999px; font-family: var(--font-display); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; font-size: 16px; white-space: nowrap; pointer-events: none; border: 2px solid; background: rgba(10,15,31,.86); }
+.swingfb span { font-weight: 600; color: var(--cream); }
+.swingfb.good { color: #7fd36b; border-color: #7fd36b; } .swingfb.meh { color: var(--lamp); border-color: var(--lamp); } .swingfb.bad { color: var(--red); border-color: var(--red); }
+.swingfb.show { animation: pop .32s cubic-bezier(.2,1.6,.4,1) both; }
 
 .overlay {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -134,6 +138,22 @@ canvas.layer { pointer-events: none; }
 .card p { margin: 0; color: var(--cream-dim); line-height: 1.5; font-size: 14px; }
 .label { font-family: var(--font-display); font-weight: 800; letter-spacing: .16em; text-transform: uppercase; font-size: 12px; color: var(--cream-dim); margin-bottom: 6px; }
 .seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.rank-row { display: flex; gap: 10px; align-items: flex-start; margin: 4px 0 12px; font-size: 13px; color: var(--cream-dim); cursor: pointer; }
+.rank-row input { width: 18px; height: 18px; margin-top: 1px; accent-color: var(--lamp); }
+.rank-row b { color: var(--cream); margin-right: 4px; }
+.lb-row { margin-top: 10px; }
+.lb-list { list-style: none; margin: 12px 0 6px; padding: 0; min-height: 60px; max-height: 46vh; overflow: auto; }
+.lb-list li { display: grid; grid-template-columns: 2.2em 1fr auto; gap: 10px; align-items: baseline; padding: 7px 4px; border-bottom: 1px solid rgba(255,255,255,.08); }
+.lb-list li.me { color: var(--lamp); }
+.lb-list .n { font-family: var(--font-display); font-weight: 800; opacity: .7; }
+.lb-list .v { font-family: var(--font-display); font-weight: 800; font-size: 18px; }
+.lb-list small { opacity: .6; margin-left: 6px; }
+.perk-list { display: grid; gap: 8px; margin-top: 10px; }
+.perk-list button { text-align: left; padding: 12px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.06); color: inherit; font: inherit; cursor: pointer; }
+.perk-list button:hover, .perk-list button:focus-visible { border-color: var(--lamp); box-shadow: inset 0 0 0 1px var(--lamp); }
+.perk-list strong { display: block; font-family: var(--font-display); font-weight: 800; font-size: 19px; letter-spacing: .04em; text-transform: uppercase; }
+.perk-list span { font-size: 13px; color: var(--cream-dim); }
+.perk-list em { font-style: normal; color: var(--lamp); font-size: 12px; margin-left: 6px; }
 .seg button {
   flex: 1 1 0; min-width: 120px; padding: 10px 12px; border-radius: 4px; cursor: pointer; text-align: left;
   background: var(--board-edge); border: 1px solid rgba(243,234,210,.15);
@@ -173,6 +193,9 @@ canvas.layer { pointer-events: none; }
 body.practice .pstats { display: flex; }
 body.practice .ls-wrap, body.practice .count, body.practice .diamond { display: none; }
 .seg button { min-width: 150px; }
+.wxseg button { min-width: 84px; }
+.credits { color: var(--cream-dim); }
+.wxline { color: var(--lamp); }
 .final { font-family: var(--font-mono); font-size: 34px; font-weight: 700; color: var(--cream); font-variant-numeric: tabular-nums; }
 
 .hint { font-size: 13px; color: var(--cream-dim); line-height: 1.4; min-height: 1.4em; }
@@ -201,7 +224,7 @@ body.practice .ls-wrap, body.practice .count, body.practice .diamond { display: 
     <rect id="b1" x="37" y="21" width="12" height="12" transform="rotate(45 43 27)"/>
   </svg>
   <div class="pstats" id="pstats"></div>
-  <div class="meta"><div class="inn" id="inn">Top 1</div><div class="mph" id="mph">Last pitch —</div></div>
+  <div class="meta"><div class="inn" id="inn">Top 1</div><div class="mph" id="mph">Last pitch —</div><div class="mph wxline" id="wxline"></div></div>
   <div class="tools">
     <button id="snd" type="button" aria-pressed="true">Sound on</button>
     <button id="faceBtn" type="button" title="Show or hide your cartoon bobblehead">Bobblehead on</button>
@@ -214,6 +237,7 @@ body.practice .ls-wrap, body.practice .count, body.practice .diamond { display: 
   <canvas id="cv"></canvas>
   <div class="banner" id="banner" hidden></div>
   <div class="prompt" id="prompt" hidden></div>
+  <div class="swingfb" id="swingfb" hidden></div>
 
   <div class="overlay" id="menu">
     <div class="card">
@@ -228,6 +252,7 @@ body.practice .ls-wrap, body.practice .count, body.practice .diamond { display: 
           <button type="button" data-mode="derby" aria-pressed="false"><strong>HR Derby</strong><span>10 outs. Anything but a homer is an out</span></button>
           <button type="button" data-mode="bullpen" aria-pressed="false"><strong>Bullpen</strong><span>Just you on the mound. Work on your strikes</span></button>
           <button type="button" data-mode="targets" aria-pressed="false"><strong>HR Targets</strong><span>Derby with bullseyes past the wall. Hit them all before time runs out</span></button>
+          <button type="button" data-mode="rogue" aria-pressed="false"><strong>Rogue-lite</strong><span>Score your way through stages, pick a perk after each. One run, no do-overs</span></button>
         </div>
       </div>
       <div id="innBox">
@@ -237,6 +262,23 @@ body.practice .ls-wrap, body.practice .count, body.practice .diamond { display: 
           <button type="button" data-inn="3" aria-pressed="true"><strong>3</strong></button>
           <button type="button" data-inn="5" aria-pressed="false"><strong>5</strong></button>
           <button type="button" data-inn="7" aria-pressed="false"><strong>7</strong></button>
+        </div>
+      </div>
+      <div id="condBox">
+        <div class="label">Park</div>
+        <div class="seg small" id="parkSeg">
+          <button type="button" data-park="stadium"><strong>Stadium</strong><span>Big crowd, 10 ft wall</span></button>
+          <button type="button" data-park="hampton"><strong>Hampton Park</strong><span>Ottawa. Trees, chain-link, the Queensway</span></button>
+        </div>
+        <div class="label" style="margin-top:10px">Weather</div>
+        <div class="seg small wxseg" id="wxSeg">
+          <button type="button" data-wx="random"><strong>Random</strong></button>
+          <button type="button" data-wx="sunny"><strong>Sunny</strong></button>
+          <button type="button" data-wx="rain"><strong>Rain</strong></button>
+          <button type="button" data-wx="snow"><strong>Snow</strong></button>
+          <button type="button" data-wx="storm"><strong>Storm</strong></button>
+          <button type="button" data-wx="tornado"><strong>Tornado</strong></button>
+          <button type="button" data-wx="silly"><strong>Silly</strong></button>
         </div>
       </div>
       <div id="buildBox" hidden>
@@ -257,8 +299,11 @@ body.practice .ls-wrap, body.practice .count, body.practice .diamond { display: 
         <p class="fine">The creator picks the innings and bats first. You swap between pitching and batting every half inning.</p>
       </div>
       <div id="cpuPanel" hidden>
+        <label class="rank-row" id="rankBox" hidden><input type="checkbox" id="rankChk"><span><b>Ranked</b> Counts on the leaderboard. Always 3 innings, normal hitter, the stadium.</span></label>
         <button class="go" id="startBtn" type="button">Play ball</button>
       </div>
+      <div class="row lb-row"><button class="go ghost" id="lbBtn" type="button">Leaderboard</button></div>
+      <p class="fine credits">Character sizes by Adam.</p>
       <div class="how">
         <div><b>Pitching</b>Hold the button and the arm follows your mouse: down swings it back, up swings it through, left and right moves the hand. Let go as it comes through. Arm speed is pitch speed; the ring shows where it will land.</div>
         <div><b>Batting</b>Mouse left and right swings the bat around your body, locked with no lag; up and down sets the height. Move fast to swing hard. A/D and W/S move you around the box. Meet the ball out front as it drops in.</div>
@@ -266,6 +311,28 @@ body.practice .ls-wrap, body.practice .count, body.practice .diamond { display: 
     </div>
   </div>
 
+  <div class="overlay" id="lbOverlay" hidden>
+    <div class="card">
+      <div class="label">Ranked · Vs CPU</div>
+      <h1>Leaderboard</h1>
+      <div class="seg small" id="lbSeg">
+        <button type="button" data-stat="wins" aria-pressed="true"><strong>Wins</strong></button>
+        <button type="button" data-stat="strikeouts" aria-pressed="false"><strong>Strikeouts</strong></button>
+        <button type="button" data-stat="home_runs" aria-pressed="false"><strong>Home runs</strong></button>
+      </div>
+      <ol class="lb-list" id="lbList"></ol>
+      <p class="fine" id="lbNote"></p>
+      <div class="row"><button class="go ghost" id="lbClose" type="button">Close</button></div>
+    </div>
+  </div>
+  <div class="overlay" id="perks" hidden>
+    <div class="card">
+      <div class="label" id="perkStage">Stage cleared</div>
+      <h1>Pick a perk</h1>
+      <p id="perkNote"></p>
+      <div class="perk-list" id="perkList"></div>
+    </div>
+  </div>
   <div class="overlay" id="over" hidden>
     <div class="card">
       <div class="label">Final</div>
@@ -283,5 +350,7 @@ body.practice .ls-wrap, body.practice .count, body.practice .diamond { display: 
 
 <script src="core.js"></script>
 <script src="game.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
+<script type="module" src="ranked.js"></script>
 </body>
 </html>
