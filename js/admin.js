@@ -54,6 +54,8 @@ async function render() {
   try {
     const ov = await call('admin_overview');
     const badge = document.getElementById('repBadge'); badge.hidden = !ov.openReports; badge.textContent = ov.openReports;
+    const fb = document.getElementById('flagBadge'); fb.hidden = !ov.openFlags; fb.textContent = ov.openFlags;
+    if (tab === 'flags') return flags();
     if (tab === 'overview') return overview(ov);
     if (tab === 'listings') return listings();
     if (tab === 'bans') return bans();
@@ -68,7 +70,7 @@ function overview(ov) {
   const tile = (n, label, href) => `<a class="tile admin-tile" href="${href || '#'}"><b>${esc(n)}</b><span class="muted small">${esc(label)}</span></a>`;
   view.innerHTML = `<h2>Overview</h2>
   <div class="admin-tiles">
-    ${tile(ov.openReports, 'Open reports', '#reports')}${tile(live, 'Live listings', '#listings')}${tile(L.sold || 0, 'Sold')}${tile(L.removed || 0, 'Removed by admins', '#listings')}
+    ${tile(ov.openReports, 'Open reports', '#reports')}${tile(ov.openFlags || 0, 'Scam flags to check', '#flags')}${tile(live, 'Live listings', '#listings')}${tile(L.sold || 0, 'Sold')}${tile(L.removed || 0, 'Removed by admins', '#listings')}
     ${tile(ov.newListings7, 'New listings this week')}${tile(ov.conversations7, 'New conversations this week')}${tile(ov.messages7, 'Messages this week')}
     ${tile(ov.sellers, 'Sellers')}${tile(ov.bans, 'Banned from Gear', '#bans')}${tile(ov.people, 'Accounts')}
   </div>
@@ -149,6 +151,35 @@ async function sellerSummary(b) {
     const s = await call('admin_user_summary', { p_user: b.dataset.whoSummary });
     out.innerHTML = `${esc(s.name || 'No name')} · joined ${esc(s.joined ? new Date(s.joined).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '?')} · ${s.listings} listing${s.listings === 1 ? '' : 's'} (${s.removed} removed) · ${s.reportsAgainst} report${s.reportsAgainst === 1 ? '' : 's'} against them${s.banned ? ` · <b style="color:var(--out)">banned${s.banned.until ? ' until ' + esc(new Date(s.banned.until).toLocaleDateString()) : ''}</b>` : ''}`;
   } catch (e) { out.textContent = e.userMessage || 'Couldn’t load.'; }
+}
+
+/* ---------- automatic scam flags ---------- */
+let showAllFlags = false;
+async function flags() {
+  const rows = await call('admin_flags', { p_all: showAllFlags }) || [];
+  const ids = [...new Set(rows.map(r => r.listing_id).filter(Boolean))];
+  const { data: ls } = ids.length ? await sb.from('docs').select('id, data, owner').eq('scope', 'global').eq('col', 'listings').in('id', ids) : { data: [] };
+  const byId = Object.fromEntries((ls || []).map(l => [l.id, l]));
+  await loadNames((ls || []).map(l => l.owner));
+  view.innerHTML = `<h2>Scam flags</h2>
+  <p class="muted small" style="margin-top:-6px">Dugout flags listings and Gear messages that use scammers’ words (deposits, paying before meeting, gift cards, crypto, outside links, moving to another app). For messages you only see the words that matched, never the message.</p>
+  <div class="row" style="margin-bottom:12px"><span class="grow muted small">${rows.filter(r => r.status === 'open').length} to check</span><button class="btn ghost small" type="button" id="flagAll">${showAllFlags ? 'Show open only' : 'Show all, including closed'}</button></div>
+  <div class="stack">${rows.length ? rows.map(r => { const l = byId[r.listing_id];
+    return `<article class="panel admin-card${r.status === 'open' ? ' open' : ''}">
+      <div class="row"><div class="grow"><b>${r.kind === 'listing' ? 'Listing' : 'Gear message'}</b> by ${esc(r.name || 'someone')} <span class="muted small">· ${esc(when(r.at))}</span>
+        <div class="tagrow" style="margin-top:4px">${(r.terms || []).map(t => `<span class="pill out">${esc(t)}</span>`).join(' ')}</div></div>
+        <span class="pill ${r.status === 'open' ? 'maybe' : ''}">${r.status === 'open' ? 'Open' : r.status === 'dismissed' ? 'Dismissed' : 'Dealt with'}</span></div>
+      ${r.excerpt ? `<blockquote class="admin-quote">${esc(r.excerpt)}</blockquote>` : r.kind === 'message' ? `<p class="muted small">In a conversation about “${esc(r.listing_title || 'a listing')}”. Ask the buyer to report it if you need to act on a message.</p>` : ''}
+      ${l ? listingBlock(l) : r.listing_id ? '<p class="muted small">The listing is gone.</p>' : ''}
+      ${r.kind === 'message' && r.user_id ? `<div class="row"><button class="btn ghost small" type="button" data-banflag="${esc(r.user_id)}" data-name="${esc(r.name || '')}">Ban the sender from Gear</button></div>` : ''}
+      <div class="row">${r.status === 'open' ? `<button class="btn small" type="button" data-flag="${esc(r.id)}" data-o="actioned">Mark dealt with</button><button class="btn ghost small" type="button" data-flag="${esc(r.id)}" data-o="dismissed">Not a problem</button>` : `<button class="btn ghost small" type="button" data-flag="${esc(r.id)}" data-o="open">Reopen</button>`}</div>
+    </article>`; }).join('') : `<div class="panel empty">${showAllFlags ? 'No flags yet.' : 'Nothing flagged. Nice.'}</div>`}</div>`;
+  document.getElementById('flagAll').onclick = () => { showAllFlags = !showAllFlags; flags(); };
+  view.querySelectorAll('[data-flag]').forEach(b => b.onclick = () => act(() => call('admin_close_flag', { p_id: +b.dataset.flag, p_outcome: b.dataset.o }), b.dataset.o === 'dismissed' ? 'Marked not a problem' : b.dataset.o === 'open' ? 'Reopened' : 'Marked dealt with'));
+  view.querySelectorAll('[data-banflag]').forEach(b => b.onclick = () => ask({ title: `Ban ${b.dataset.name || 'this person'} from Gear?`, body: 'They won’t be able to list or message anyone in Gear. Their teams aren’t affected.', note: 'Reason (for the activity log)', go: 'Ban', danger: true, days: true, hide: true,
+    run: (n, days, hide) => call('admin_ban', { p_user: b.dataset.banflag, p_reason: n, p_days: days, p_hide_listings: hide }), ok: 'Banned from Gear' }));
+  bindListingActions();
+  view.querySelectorAll('[data-who-summary]').forEach(b => b.onclick = () => sellerSummary(b));
 }
 
 /* ---------- listings ---------- */

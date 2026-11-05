@@ -141,9 +141,10 @@ Forecasts come from MET Norway and cover about the next 9 days. They're free to 
 - **Reports:** every report with the reporter's note and the listing. Remove, delete, ban the seller, see the seller's history, then mark it dealt with or dismiss it.
 - **Listings:** search and filter every listing (live, pending, sold, removed) and moderate any of them.
 - **Bans:** who's banned from Gear, why and until when. Lift a ban.
+- **Scam flags:** listings and Gear messages that use scammers' words (deposits, paying before meeting, gift cards, crypto, outside links, moving to another app, verification codes). For messages only the matched words are kept, never the message. Buyers also see a warning in the conversation.
 - **Activity:** every admin action, who did it and when.
 
-Removing hides a listing from everyone but the seller, who can't relist it. Deleting erases it with its photos and conversations. A ban stops listing and messaging in Gear (7 days, 30 days or until lifted) without touching teams. Admins can't read private buyer and seller messages. All of it is enforced by the database (`admin_*` functions), and every action is logged.
+Removing hides a listing from everyone but the seller, who can't relist it. Deleting erases it with its photos and conversations. A ban stops listing and messaging in Gear (7 days, 30 days or until lifted) without touching teams. Admins can't read private buyer and seller messages. When someone is banned, a scrambled (hashed) copy of their email is kept, so signing up again with it (even with dots or a +tag added to a Gmail address) brings the ban straight back. Lifting the ban clears it. All of it is enforced by the database (`admin_*` functions), and every action is logged.
 
 To make someone an admin, run this once in the Supabase SQL editor with their sign-in email:
 
@@ -160,6 +161,26 @@ python3 tools/sync-game.py path/to/the-new-game.html
 ```
 
 The script splits the scripts out (the site's security rules don't run inline scripts), renames it Slowpitch Showdown, adds the Back to Dugout link, starts on Vs CPU, and removes any embedded photo (it stops with an error if a photo is still left). Open `game/` to try it, then commit and push.
+
+## Backups
+
+`.github/workflows/backup.yml` backs up the database every Sunday at 2:13 AM (Toronto time), and whenever you press **Run workflow** under GitHub → Actions → Database backup. The backup is encrypted with your passphrase before it's stored (the repo is public), and kept for 90 days on each run's page.
+
+**Set it up once.** In GitHub, go to **Settings → Secrets and variables → Actions → New repository secret** and add:
+
+1. `SUPABASE_DB_URL`: in Supabase, click **Connect**, copy the **Session pooler** connection string and put your database password in place of `[YOUR-PASSWORD]`. (Use the session pooler, not "Direct connection": GitHub can't reach the direct one.)
+2. `BACKUP_PASSPHRASE`: a long passphrase. Save it in your password manager: without it, a backup can't be opened.
+
+Then run it once by hand to check it works.
+
+**To restore** (for example into a new Supabase project), download the backup from the run's page, then:
+
+```
+gpg -d dugout-2026-11-08.dump.gpg > dugout.dump        # asks for the passphrase
+pg_restore --no-owner --no-privileges --data-only -d "<the new project's session pooler URL>" dugout.dump
+```
+
+Run `supabase/schema.sql` in the new project first, so the tables and rules exist before the data goes in.
 
 ## Who can do what
 

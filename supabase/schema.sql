@@ -75,6 +75,19 @@ create table if not exists public.admin_log (
   admin uuid references auth.users on delete set null,
   action text not null, target text not null default '', note text not null default '' check (char_length(note) <= 300),
   at timestamptz not null default now());
+-- a banned person's email, normalised and hashed, so signing up again with it doesn't get round the ban
+create table if not exists public.banned_emails (hash text primary key, user_id uuid, at timestamptz not null default now(), until timestamptz);
+-- automatic scam flags: listings and Gear messages that use the words scammers use. Messages stay private: only the matched words are kept
+create table if not exists public.auto_flags (
+  id bigint generated always as identity primary key,
+  kind text not null check (kind in ('listing', 'message')),
+  target text not null,                                -- listing id, or conversation id
+  user_id uuid references auth.users on delete set null,
+  terms text[] not null,
+  excerpt text not null default '',                     -- listings only (they're public anyway)
+  status text not null default 'open' check (status in ('open', 'actioned', 'dismissed')),
+  at timestamptz not null default now());
+create index if not exists auto_flags_open on public.auto_flags (status, at desc);
 
 -- all app data. scope = a team id, or 'global' for the league-wide sub list
 create table if not exists public.docs (
@@ -137,11 +150,13 @@ alter table public.import_log enable row level security;
 alter table public.admins enable row level security;
 alter table public.market_bans enable row level security;
 alter table public.admin_log enable row level security;
+alter table public.banned_emails enable row level security;
+alter table public.auto_flags enable row level security;
 
 -- signed-out visitors get nothing; signed-in users get only what the policies below allow
 -- (Supabase grants every new table to anon and authenticated by default, so take it all back first, then grant only what's needed)
 revoke all on public.profiles, public.teams, public.team_members, public.join_attempts, public.docs, public.accounts, public.app_flags, public.import_log,
-  public.admins, public.market_bans, public.admin_log from anon, authenticated, public;  -- the moderation tables: functions only
+  public.admins, public.market_bans, public.admin_log, public.banned_emails, public.auto_flags from anon, authenticated, public;  -- the moderation tables: functions only
 grant select on public.accounts to authenticated;
 grant select, insert, delete on public.docs to authenticated;
 grant update (scope, col, id, data) on public.docs to authenticated;  -- the key columns are needed for upserts; a trigger stops them changing
@@ -178,6 +193,45 @@ create or replace function public.is_admin() returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (select 1 from public.admins a where a.user_id = (select auth.uid()));
 $$;
+-- the same mailbox written different ways (Casey.Jones+gear@gmail.com, caseyjones@gmail.com) gives the same key
+create or replace function public.email_key(e text) returns text
+language plpgsql immutable set search_path = '' as $$
+declare loc text; dom text;
+begin
+  e := lower(trim(coalesce(e, '')));
+  loc := split_part(e, '@', 1); dom := split_part(e, '@', 2);
+  loc := split_part(loc, '+', 1);
+  if dom in ('gmail.com', 'googlemail.com') then loc := replace(loc, '.', ''); dom := 'gmail.com'; end if;
+  return encode(sha256(convert_to(loc || '@' || dom, 'UTF8')), 'hex');
+end $$;
+-- the phrases scammers lean on in marketplaces. Returns the labels that match (empty if none)
+create or replace function public.scam_terms(t text) returns text[]
+language sql immutable set search_path = '' as $$
+  select coalesce(array_agg(label order by n), '{}') from (values
+    (1, 'deposit', '\mdeposits?\M'),
+    (2, 'pay before meeting', '(e-?transfer|interac|pay(ment)?|send (the )?money)[^.!?]{0,40}\m(first|before|advance|up ?front|to hold)\M|\m(first|before|advance|up ?front|to hold)\M[^.!?]{0,30}(e-?transfer|interac|payment)'),
+    (3, 'gift cards', '\mgift ?cards?\M'),
+    (4, 'wire transfer', '\m(western union|moneygram|wire transfer)\M'),
+    (5, 'crypto', '\m(bitcoin|crypto|btc|usdt|ethereum)\M'),
+    (6, 'payment app', '\m(cash ?app|venmo|zelle|paypal friends)\M'),
+    (7, 'shipping only', '\m(shipping only|ship only|courier only|i can ship|will ship it)\M'),
+    (8, 'outside link', '(https?://|www\.)'),
+    (9, 'move to another app', '\m(whats ?app|telegram|signal me)\M'),
+    (10, 'verification code', '\m(verification code|verify code|6.digit code|confirmation code)\M')
+  ) v(n, label, re) where coalesce(t, '') ~* re;
+$$;
+create or replace function public.flag_if_scammy(p_kind text, p_target text, p_user uuid, p_text text, p_excerpt text) returns void
+language plpgsql security definer set search_path = '' as $$
+declare terms text[] := public.scam_terms(p_text);
+begin
+  if cardinality(terms) = 0 then return; end if;
+  if exists (select 1 from public.auto_flags where kind = p_kind and target = p_target and status = 'open') then
+    update public.auto_flags set terms = (select array_agg(distinct x) from unnest(auto_flags.terms || terms) x), at = now()
+      where kind = p_kind and target = p_target and status = 'open';
+  else
+    insert into public.auto_flags (kind, target, user_id, terms, excerpt) values (p_kind, p_target, p_user, terms, left(coalesce(p_excerpt, ''), 300));
+  end if;
+end $$;
 create or replace function public.is_market_banned() returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (select 1 from public.market_bans b where b.user_id = (select auth.uid()) and (b.until is null or b.until > now()));
@@ -217,7 +271,7 @@ $$;
 ---------------------------------------------------------------------------
 do $$ declare r record; begin
   for r in select policyname, tablename from pg_policies where schemaname = 'public'
-           and tablename in ('profiles', 'teams', 'team_members', 'join_attempts', 'docs', 'accounts', 'app_flags', 'import_log', 'admins', 'market_bans', 'admin_log') loop
+           and tablename in ('profiles', 'teams', 'team_members', 'join_attempts', 'docs', 'accounts', 'app_flags', 'import_log', 'admins', 'market_bans', 'admin_log', 'banned_emails', 'auto_flags') loop
     execute format('drop policy %I on public.%I', r.policyname, r.tablename);
   end loop;
 end $$;
@@ -446,6 +500,9 @@ begin
       new.data := new.data - 'lat' - 'lng';
     end if;
     new.data := new.data || jsonb_build_object('seller', coalesce(new.owner, me)::text);
+    if coalesce(current_setting('dugout.admin', true), '') <> 'on' then
+      perform public.flag_if_scammy('listing', new.id, coalesce(new.owner, me), concat_ws(' ', new.data->>'title', new.data->>'desc'), concat_ws(': ', new.data->>'title', new.data->>'desc'));
+    end if;
 
   elsif new.col = 'threads' then
     if tg_op = 'INSERT' and public.is_market_banned() then raise exception 'Your Gear access is suspended. Contact Dugout if you think this is a mistake.'; end if;
@@ -471,6 +528,7 @@ begin
     select count(*) into recent from public.docs where owner = me and col = 'messages' and created_at > now() - interval '10 minutes';
     if recent >= 60 then raise exception 'Slow down a little. Try again in a few minutes.'; end if;
     if char_length(coalesce(new.data->>'text', '')) not between 1 and 1000 then raise exception 'Messages are 1 to 1000 characters'; end if;
+    perform public.flag_if_scammy('message', new.data->>'thread', me, new.data->>'text', '');   -- the words only; the message stays private
     new.data := jsonb_build_object('thread', new.data->>'thread', 'text', new.data->>'text', 'from', me::text,
                                    'at', (extract(epoch from now()) * 1000)::bigint);
 
@@ -596,6 +654,12 @@ begin
   values (new.id, left(coalesce(nullif(trim(new.raw_user_meta_data->>'name'), ''), split_part(new.email, '@', 1), ''), 40))
   on conflict (id) do nothing;
   insert into public.accounts (user_id) values (new.id) on conflict (user_id) do nothing;
+  -- signed up again with an email that was banned from Gear: the ban carries over
+  insert into public.market_bans (user_id, reason, until)
+    select new.id, 'Signed up again after a Gear ban', b.until from public.banned_emails b
+    where b.hash = public.email_key(new.email) and (b.until is null or b.until > now())
+    on conflict (user_id) do nothing;
+  if found then insert into public.admin_log (admin, action, target, note) values (null, 'auto-ban', new.id::text, 'New account with a banned email'); end if;
   return new;
 end $$;
 drop trigger if exists on_auth_user_created on auth.users;
@@ -802,6 +866,9 @@ begin
   if exists (select 1 from public.admins where user_id = p_user) then raise exception 'That person is an admin'; end if;
   insert into public.market_bans (user_id, reason, by, until) values (p_user, left(coalesce(p_reason, ''), 300), me, case when p_days is null then null else now() + make_interval(days => p_days) end)
     on conflict (user_id) do update set reason = excluded.reason, by = excluded.by, at = now(), until = excluded.until;
+  insert into public.banned_emails (hash, user_id, until)
+    select public.email_key(u.email), p_user, case when p_days is null then null else now() + make_interval(days => p_days) end from auth.users u where u.id = p_user and u.email is not null
+    on conflict (hash) do update set user_id = excluded.user_id, at = now(), until = excluded.until;
   if p_hide_listings then
     perform set_config('dugout.admin', 'on', true);
     update public.docs set data = data || jsonb_build_object('status', 'removed', 'removedNote', 'Seller banned')
@@ -815,6 +882,7 @@ language plpgsql security definer set search_path = '' as $$
 begin
   perform public.admin_check();
   delete from public.market_bans where user_id = p_user;
+  delete from public.banned_emails where user_id = p_user;
   perform public.admin_note('unban', p_user::text, '');
 end $$;
 
@@ -831,6 +899,7 @@ begin
     'messages7', (select count(*) from public.docs where scope = 'global' and col = 'messages' and created_at > now() - interval '7 days'),
     'sellers', (select count(distinct owner) from public.docs where scope = 'global' and col = 'listings'),
     'bans', (select count(*) from public.market_bans where until is null or until > now()),
+    'openFlags', (select count(*) from public.auto_flags where status = 'open'),
     'people', (select count(*) from public.profiles));
 end $$;
 create or replace function public.admin_bans() returns table (user_id uuid, name text, reason text, at timestamptz, until timestamptz, by_name text)
@@ -846,6 +915,29 @@ begin
   perform public.admin_check();
   return query select l.at, p.display_name, l.action, l.target, l.note from public.admin_log l left join public.profiles p on p.id = l.admin order by l.at desc limit 200;
 end $$;
+-- automatic scam flags, with names and the listing each one is about
+create or replace function public.admin_flags(p_all boolean default false) returns table (id bigint, kind text, target text, user_id uuid, name text, terms text[], excerpt text, status text, at timestamptz, listing_id text, listing_title text)
+language plpgsql stable security definer set search_path = '' as $$
+begin
+  perform public.admin_check();
+  return query select f.id, f.kind, f.target, f.user_id, p.display_name, f.terms, f.excerpt, f.status, f.at,
+      case when f.kind = 'listing' then f.target else th.data->>'listing' end,
+      coalesce(l.data->>'title', th.data->>'title')
+    from public.auto_flags f
+    left join public.profiles p on p.id = f.user_id
+    left join public.docs th on f.kind = 'message' and th.scope = 'global' and th.col = 'threads' and th.id = f.target
+    left join public.docs l on l.scope = 'global' and l.col = 'listings' and l.id = case when f.kind = 'listing' then f.target else th.data->>'listing' end
+    where p_all or f.status = 'open' order by f.at desc limit 300;
+end $$;
+create or replace function public.admin_close_flag(p_id bigint, p_outcome text) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  perform public.admin_check();
+  if p_outcome not in ('actioned', 'dismissed', 'open') then raise exception 'Pick actioned, dismissed or open'; end if;
+  update public.auto_flags set status = p_outcome where id = p_id;
+  perform public.admin_note('flag ' || p_outcome, p_id::text, '');
+end $$;
+
 -- for showing a seller's history next to a report
 create or replace function public.admin_user_summary(p_user uuid) returns jsonb
 language plpgsql stable security definer set search_path = '' as $$
@@ -868,7 +960,8 @@ grant execute on function public.create_team(text), public.join_team(text), publ
   public.delete_my_account(), public.mark_thread_seen(text), public.reset_cal_token(), public.i_am_here(), public.online_subs() to authenticated;
 grant execute on function public.is_admin(), public.is_market_banned(), public.admin_listing_status(text, text, text), public.admin_delete_listing(text, text),
   public.admin_resolve_report(text, text, text), public.admin_ban(uuid, text, int, boolean), public.admin_unban(uuid),
-  public.admin_overview(), public.admin_bans(), public.admin_activity(), public.admin_user_summary(uuid) to authenticated;
+  public.admin_overview(), public.admin_bans(), public.admin_activity(), public.admin_user_summary(uuid),
+  public.admin_flags(boolean), public.admin_close_flag(bigint, text) to authenticated;
 grant execute on function public.is_paid_captain() to authenticated;
 grant execute on function public.is_member(text), public.is_captain(text), public.is_any_captain(), public.shares_team(uuid),
   public.contact_unlocked(text), public.owns_player(text, text), public.in_thread(text) to authenticated;

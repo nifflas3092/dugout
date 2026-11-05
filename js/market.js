@@ -237,6 +237,12 @@ function inbox(c) {
   box.querySelectorAll('[data-th]').forEach(b => b.onclick = () => go(c, 'thread', b.dataset.th));
 }
 
+// the same red flags the database watches for, so the buyer gets a warning right in the conversation
+const SCAM = [[/\bdeposits?\b/i, 'a deposit'], [/(e-?transfer|interac|pay(ment)?|send (the )?money)[^.!?]{0,40}\b(first|before|advance|up ?front|to hold)\b|\b(first|before|advance|up ?front|to hold)\b[^.!?]{0,30}(e-?transfer|interac|payment)/i, 'paying before you meet'],
+  [/\bgift ?cards?\b/i, 'gift cards'], [/\b(western union|moneygram|wire transfer)\b/i, 'a wire transfer'], [/\b(bitcoin|crypto|btc|usdt|ethereum)\b/i, 'crypto'],
+  [/\b(cash ?app|venmo|zelle|paypal friends)\b/i, 'a payment app'], [/\b(shipping only|ship only|courier only|i can ship|will ship it)\b/i, 'shipping instead of meeting'],
+  [/(https?:\/\/|www\.)/i, 'a link to another site'], [/\b(whats ?app|telegram|signal me)\b/i, 'moving to another app'], [/\b(verification code|verify code|6.digit code|confirmation code)\b/i, 'a verification code']];
+const scamHits = text => SCAM.filter(([re]) => re.test(text || '')).map(([, label]) => label);
 function thread(c) {
   const { st, esc, platform } = c, me = c.myId(), box = document.getElementById('gearBody');
   const t = st.threads.find(x => x.id === openId);
@@ -244,10 +250,12 @@ function thread(c) {
   const msgs = st.messages.filter(m => m.thread === t.id).sort((a, b) => (a.at || 0) - (b.at || 0));
   const l = st.listings.find(x => x.id === t.listing);
   const draft = (document.getElementById('mtxt') || {}).value || '';
+  const hits = [...new Set(msgs.filter(m => m.from !== me).flatMap(m => scamHits(m.text)))];
   box.innerHTML = `<button class="btn ghost small" type="button" id="gback" style="margin-bottom:10px">← Inbox</button>
   <div class="panel">
     <div class="row" style="margin-bottom:8px"><div class="grow"><b>${esc(t.title || 'Listing')}</b><div class="muted small">${t.buyer === me ? `Seller: ${esc(l?.name || 'the seller')}` : 'A buyer is asking'}${l ? ` · ${esc(price(l.price))}${l.status !== 'active' ? ' · ' + (l.status === 'sold' ? 'sold' : 'pending') : ''}` : ' · listing removed'}</div></div>
       ${l ? '<button class="btn ghost small" type="button" id="gview">View listing</button>' : ''}</div>
+    ${hits.length ? `<div class="scam-warn" role="alert"><b>Be careful.</b> This conversation mentions ${esc(hits.slice(0, 3).reduce((txt, h, i, arr) => txt + (i === 0 ? '' : i === arr.length - 1 ? ' and ' : ', ') + h, ''))}. Scammers often ask for money, codes or a move to another app before you meet. Never pay before you’ve seen the item in person.${l ? ' <button class="linkish" type="button" id="greport">Report this listing</button>' : ''}</div>` : ''}
     <div class="chat" id="chat" aria-live="polite">${msgs.map(m => `<div class="bubble${m.from === me ? ' mine' : ''}"><div>${esc(m.text)}</div><div class="muted small">${esc(new Date(m.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}</div></div>`).join('') || '<p class="muted small">Say hi and ask your question. Agree on a public place to meet.</p>'}</div>
     <form class="row" id="mform" style="margin-top:10px"><label for="mtxt" class="sr">Message</label><input id="mtxt" class="grow" type="text" maxlength="1000" autocomplete="off" placeholder="Write a message" value="${esc(draft)}"><button class="btn" type="submit">Send</button></form>
   </div>
@@ -255,6 +263,7 @@ function thread(c) {
   const chat = box.querySelector('#chat'); chat.scrollTop = chat.scrollHeight;
   box.querySelector('#gback').onclick = () => go(c, 'inbox');
   const v = box.querySelector('#gview'); if (v) v.onclick = () => go(c, 'item', t.listing);
+  const gr = box.querySelector('#greport'); if (gr) gr.onclick = () => go(c, 'item', t.listing);
   box.querySelector('#mform').addEventListener('submit', async e => {
     e.preventDefault(); const inp = box.querySelector('#mtxt'), text = inp.value.trim(); if (!text) return;
     inp.value = '';

@@ -1,0 +1,60 @@
+# Weekly database backup.
+# Dumps the Dugout database (app data, sign-ins and file records), encrypts it with your passphrase,
+# and keeps it as a downloadable file on this workflow run for 90 days. The repo is public, so the
+# backup is never stored unencrypted: without the passphrase it's unreadable.
+# Setup (once): Settings → Secrets and variables → Actions → New repository secret:
+#   SUPABASE_DB_URL    Supabase → Connect → Session pooler connection string, with your database password filled in
+#   BACKUP_PASSPHRASE  a long passphrase you keep in your password manager (you need it to open a backup)
+name: Database backup
+
+on:
+  schedule:
+    - cron: '13 7 * * 0'      # Sundays, 2:13 AM Toronto time
+  workflow_dispatch: {}       # "Run workflow" button for a backup right now
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+    steps:
+      - name: Check the secrets are set
+        id: check
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ] || [ -z "$BACKUP_PASSPHRASE" ]; then
+            echo "::warning::Backup skipped: add the SUPABASE_DB_URL and BACKUP_PASSPHRASE secrets (see the top of this file)."
+            echo "ready=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dump the database
+        if: steps.check.outputs.ready == 'yes'
+        run: |
+          set -euo pipefail
+          docker run --rm -e PGURL="$SUPABASE_DB_URL" -v "$PWD:/out" postgres:17 \
+            sh -c 'pg_dump "$PGURL" --format=custom --no-owner --no-privileges --schema=public --schema=auth --schema=storage --file=/out/dugout.dump'
+          ls -la dugout.dump
+
+      - name: Encrypt it
+        if: steps.check.outputs.ready == 'yes'
+        run: |
+          set -euo pipefail
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$BACKUP_PASSPHRASE" --symmetric --cipher-algo AES256 \
+            --output "dugout-$(date -u +%Y-%m-%d).dump.gpg" dugout.dump
+          shred -u dugout.dump
+          ls -la *.gpg
+
+      - name: Keep it for 90 days
+        if: steps.check.outputs.ready == 'yes'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dugout-backup-${{ github.run_number }}
+          path: '*.dump.gpg'
+          retention-days: 90
+          if-no-files-found: error

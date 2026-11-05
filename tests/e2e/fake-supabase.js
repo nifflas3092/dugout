@@ -137,6 +137,8 @@ function createClient() {
           if (a.p_hide_listings) d.docs.filter(x => x.col === 'listings' && x.owner === a.p_user && ['active', 'pending'].includes(x.data.status || 'active')).forEach(x => { x.data.status = 'removed'; x.data.removedNote = 'Seller banned'; });
           note('ban', a.p_user, a.p_reason); save(d); return { data: null, error: null }; }
         if (name === 'admin_unban') { d.bans = d.bans.filter(b => b.user_id !== a.p_user); note('unban', a.p_user, ''); save(d); return { data: null, error: null }; }
+        if (name === 'admin_flags') return { data: [], error: null };
+        if (name === 'admin_close_flag') return { data: null, error: null };
         if (name === 'admin_bans') return { data: d.bans.map(b => ({ ...b, name: pname(b.user_id), by_name: pname(b.by) })), error: null };
         if (name === 'admin_activity') return { data: d.log.map(l => ({ ...l, admin_name: pname(l.admin) })), error: null };
         if (name === 'admin_user_summary') return { data: { name: pname(a.p_user), joined: new Date().toISOString(), listings: d.docs.filter(x => x.col === 'listings' && x.owner === a.p_user).length, removed: 0, reportsAgainst: 1, banned: null }, error: null };
