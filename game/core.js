@@ -7,13 +7,13 @@ const PLATE_Z = 0.71, MOUND_Z = 50, FENCE_R = 250;
 let FENCE_H = 10; // the park sets this (Hampton Park's chain-link is lower)
 /* weather and run modifiers, set by the app: wind pushes the ball (ft/s^2), a wet field kills the bounce,
    and the rogue-lite perks scale the hitting window, power and pitch speed */
-const WIND = { x: 0, z: 0 }, FIELD = { wet: 0 }, MODS = { hitR: 1, power: 1, ts: 1 };
+const WIND = { x: 0, z: 0 }, FIELD = { wet: 0 }, MODS = { hitR: 1, power: 1, ts: 1, grav: 1 };
 const ZONE = { lo: 1.5, hi: 3.6, half: 0.71, mid: 2.55 };
 /* Slowpitch: a taken pitch is a strike only if it lands on the plate or the mat behind it, and the arc must peak 6-16 ft. */
 const MAT = { half: 1.42, z0: -0.63, z1: 3.63 }; // a plywood strike board twice the old size, lined up with the batter's boxes
 const ARC = { lo: 6, hi: 16 }; // legal arc: the ball has to peak between 6 and 16 ft
 const onMat = (x, z) => Math.abs(x) <= MAT.half + BALL_R && z >= MAT.z0 - BALL_R && z <= MAT.z1 + BALL_R;
-const BALL_R = 0.16, HIT_R = 0.55, HIT_Y = 0.5; // how far above or below the barrel's center the ball can be and still be hit
+const BALL_R = 0.16, HIT_R = 0.66, HIT_Y = 0.6; // how far above or below the barrel's center the ball can be and still be hit
 const BAT = { L: 2.75, s0: 0.45, com: 1.65, Ipm: 3.4, rest: -100 * D2R, eUp: 48 * D2R, eFlat: -8 * D2R,
   drive: 0, damp: 0, maxW: 90, hz: 2.0, box: { x0: -3.3, x1: -1.75, y0: 0.9, y1: 4.4 }, handSpd: 160 };
 const ARM = { S: [-0.85, 4.7, 50.3], R: 2.35 };
@@ -84,7 +84,7 @@ function newGame(mode, innings, seat = 0, gid = null, started = 0) {
     fielders: FIELDERS.map(f => { const b = FIELD_BUILDS[f.id], sp = f.spd * BUILDS[b].range; return { ...f, base: f.home, build: b, spd: sp, x: f.home[0], z: f.home[1], run: 0 }; }),
     holding: false, handoff: null, mark: null,
   };
-  Object.assign(MODS, { hitR: 1, power: 1, ts: 1 });
+  Object.assign(MODS, { hitR: 1, power: 1, ts: 1, grav: 1 });
   if (UI.newGame) UI.newGame();
   resetPitch();
 }
@@ -95,14 +95,14 @@ function resetPitch() {
   S.trail = [];
   S.inHand = true; S.contacted = false; S.caughtByCatcher = false; S.swung = false;
   S.atPlate = null; S.atBat = null; S.contactInfo = null; S.land = null; S.apex = 0; S.t = 0; S.tReal = 0; S.ts = TS_PITCH * MODS.ts;
-  S.knocked = false;
+  S.knocked = false; S.knuckSeed = Math.random() * 6.28;
   if (!humanPitches()) S.lean = 0;
   S.cpuPlan = null; S.batted = null; S.mark = null; S.replay = null; S.rec = []; S.contactRec = null; S.hideBall = false;
   S.arm.a = -90 * D2R; S.arm.w = 0; S.oppStride = 0; S.strideNow = 0; resetHand();
   const bt = S.bat;
   bt.w = 0; bt.ax = 0; bt.swinging = false; bt.u = 0; bt.reach = 0;
   if (!humanBats()) { bt.phi = BAT.rest; bt.e = BAT.eUp; bt.hy = 3.9; bt.bx = STANCE.x; bt.bz = STANCE.z; placeHands(bt); }
-  const h = handPos(); b.x = h[0]; b.y = h[1]; b.z = h[2];
+  const h = handWorld(); b.x = h[0]; b.y = h[1]; b.z = h[2];
   S.bb = batterBuild();
   // the defense shades deep for a big hitter and creeps in for a small one
   const depth = S.bb === 'heavy' ? 1 : S.bb === 'small' ? -1 : 0;
@@ -129,19 +129,45 @@ function armHandAt(a) { const [sx, sy, sz] = ARM.S; return [sx, sy + Math.sin(a)
 function launchExact(P) {
   const b = S.ball;
   b.x = P.p[0]; b.y = P.p[1]; b.z = P.p[2];
-  b.vx = P.v[0]; b.vy = P.v[1]; b.vz = P.v[2]; b.ax = P.ax || 0; b.spin = P.spin ? [...P.spin] : [0, 0, 0];
+  b.vx = P.v[0]; b.vy = P.v[1]; b.vz = P.v[2]; b.ax = P.ax || 0; b.spin = P.spin ? [...P.spin] : [0, 0, 0]; b.mx = 1; b.kn = P.kn || 0; b.kp = P.kp || 0;
   S.inHand = false; S.lastMph = P.mph; S.lastPitch = P; S.freeHand = false;
 }
 
 /* ---------- ball flight: gravity, air drag and spin (Magnus) ---------- */
 const KM = 0.0045; // Magnus strength: extra acceleration per (rad/s of spin x ft/s of speed)
+/* knuckleball: almost no spin, so the seams catch the air unevenly and it wobbles side to side and dips on the way in.
+   The wobble is fixed by the pitch's own seed (kp) and where the ball is (z), so both screens see the same flutter. */
+const KNUCK = { side: 5.5, drop: 3.2, f1: 0.33, f2: 0.47, slow: 0.86 };
 function ballAccel(b) {
-  const sp = Math.hypot(b.vx, b.vy, b.vz), s = b.spin || [0, 0, 0], w = b.noWind ? 0 : 1;
+  const sp = Math.hypot(b.vx, b.vy, b.vz), s = b.spin || [0, 0, 0], w = b.noWind ? 0 : 1, mx = b.mx || 1;
+  let fx = 0, fy = 0;
+  if (b.kn && !b.noKnuck && b.z > 1) { const ph = b.kp || 0; fx = KNUCK.side * b.kn * Math.sin(b.z * KNUCK.f1 + ph) * mx; fy = KNUCK.drop * b.kn * Math.sin(b.z * KNUCK.f2 + ph * 1.7); }
   return [
-    -DRAG * sp * b.vx + KM * (s[1] * b.vz - s[2] * b.vy) + (b.ax || 0) + WIND.x * w,
-    -G - DRAG * sp * b.vy + KM * (s[2] * b.vx - s[0] * b.vz),
+    -DRAG * sp * b.vx + KM * (s[1] * b.vz - s[2] * b.vy) + (b.ax || 0) + WIND.x * w * mx + fx,
+    -G * MODS.grav - DRAG * sp * b.vy + KM * (s[2] * b.vx - s[0] * b.vz) + fy,
     -DRAG * sp * b.vz + KM * (s[0] * b.vy - s[1] * b.vx) + WIND.z * w,
   ];
+}
+/* lefties: everything a pitcher or batter does is worked out as a right-hander, then mirrored across the middle of the field */
+function mirrorPitch(P) { return P && { ...P, p: [-P.p[0], P.p[1], P.p[2]], v: [-P.v[0], P.v[1], P.v[2]], spin: [P.spin[0], -P.spin[1], -P.spin[2]], ax: -(P.ax || 0), curve: -(P.curve || 0) }; }
+function mirrorBallState(b) { b.x = -b.x; b.vx = -b.vx; if (b.spin) b.spin = [b.spin[0], -b.spin[1], -b.spin[2]]; if (b.ax) b.ax = -b.ax; b.mx = -(b.mx || 1); }
+function cpuBatsAt(slot) { return [2, 5, 7].includes(slot % 9) ? 'L' : 'R'; } // the CPU lineup has three lefties
+function throwsOf(t) { return t === mySeat() && S.mode !== 'derby' ? (S.myThrows || 'R') : (S.oppThrows || 'R'); }
+function batsOf(t) {
+  if (t === mySeat() && S.mode !== 'bullpen') return S.myBats || 'R';
+  if (S.mode === 'online') return S.oppBats || 'R';
+  return cpuBatsAt((S.order && S.order[t]) || 0);
+}
+const pitMirror = () => !!S && throwsOf(fieldingTeam()) === 'L';
+const batMirror = () => !!S && batsOf(battingTeam()) === 'L';
+function knuckleize(P, seed, keep) { // turn a lob into a knuckler: slower, nearly no spin, a wobble of its own
+  const k = KNUCK.slow;
+  const Q = { ...P, v: [P.v[0] * k, P.v[1], P.v[2] * k], spin: [0.4, 0, 0], kn: 1, kp: seed ?? Math.random() * 6.28, mph: Math.round((P.mph || 0) * k) };
+  if (keep) { // the CPU: still aim it at the same spot (more loft makes up for less speed)
+    const T = simLanding(P.p, P.v, P.spin, true);
+    for (let i = 0; T && i < 8; i++) { const r = simLanding(Q.p, Q.v, Q.spin, true); if (!r) break; Q.v[1] *= 1 + 0.03 * clamp(r.z - T.z, -5, 5); Q.v[0] += (T.x - r.x) / r.t; }
+  }
+  return Q;
 }
 /* Fly a pitch (no bat, no ground) until it reaches depth zEnd. */
 function simPitch(p, v, spin, zEnd = PLATE_Z) {
@@ -157,8 +183,8 @@ function simPitch(p, v, spin, zEnd = PLATE_Z) {
   return null;
 }
 /* Fly a pitch until it first touches the ground: where, when, and how high it peaked. */
-function simLanding(p, v, spin, noWind = false) { // noWind: where it would land on a still day (the pitcher has to allow for the wind)
-  const b = { x: p[0], y: p[1], z: p[2], vx: v[0], vy: v[1], vz: v[2], spin, noWind };
+function simLanding(p, v, spin, noWind = false, kn = 0, kp = 0) { // noWind: where it would land on a still day with no flutter (the pitcher has to allow for the wind)
+  const b = { x: p[0], y: p[1], z: p[2], vx: v[0], vy: v[1], vz: v[2], spin, noWind, kn, kp, noKnuck: noWind };
   const dt = 1 / 240; let apex = b.y;
   for (let t = 0; t < 6; t += dt) {
     const a = ballAccel(b);
@@ -205,6 +231,7 @@ const PFWD = [Math.sin(YAW0), 0, -Math.cos(YAW0)];
 function resetHand() { S.pend = null; S.freeHand = false; S.yaw = YAW0; S.hold = { lat: 0, latv: 0, hist: [] }; }
 function shoulderNow() { return ARM.S; }
 function pendHand() { return handPos(); }
+function handWorld() { const h = handPos(); return pitMirror() ? [-h[0], h[1], h[2]] : h; } // where the ball really is in a lefty's hand
 /* aT: arm angle the mouse asks for; latT: sideways hand offset it asks for (ft) */
 function stepHoldArm(dt, aT, latT = 0) {
   const a = S.arm, h = S.hold || (S.hold = { lat: 0, latv: 0, hist: [] });
@@ -228,8 +255,11 @@ function pitchFromArm() {
   const f = [Math.sin(yaw), 0, -Math.cos(yaw)];
   const v = [f[0] * speed * Math.cos(elev), speed * Math.sin(elev), f[2] * speed * Math.cos(elev)];
   // the curve: whichever way the hand is sweeping as you let go, the ball breaks that way
-  const curve = clamp(-latv * CURVE.k, -CURVE.max, CURVE.max);
-  return { p: handPos(), v, spin: [4, curve, 0], ax: 0, releaseA: S.arm.a, mph: Math.round(speed * 0.6818), speed, curve: -curve / CURVE.max, lean: S.lean || 0 };
+  // (hand moving toward -x (latv > 0) needs +y sidespin: the Magnus push is spin x velocity, and the ball travels toward -z)
+  const curve = clamp(latv * CURVE.k, -CURVE.max, CURVE.max);
+  let P = { p: handPos(), v, spin: [4, curve, 0], ax: 0, releaseA: S.arm.a, mph: Math.round(speed * 0.6818), speed, curve: curve / CURVE.max, lean: S.lean || 0 };
+  if (S.knuck) P = knuckleize(P, S.knuckSeed);
+  return pitMirror() ? mirrorPitch(P) : P;
 }
 /* ---------- the bat: hands follow the mouse, bat is a pendulum hanging off the hands ---------- */
 /* The bat is a weighted object pulled toward where the mouse says it should be (a stiff spring with damping
@@ -290,7 +320,8 @@ function cpuBatAt(tReal) {
   const a = bt.phi - STANCE.lag; placeHands(bt);
   bt.hvx = -Math.sin(a) * STANCE.rh * bt.w; bt.hvz = Math.cos(a) * STANCE.rh * bt.w;
 }
-function cpuPlanSwing() {
+function cpuPlanSwing() { if (batMirror()) { mirrorBallState(S.ball); try { return cpuPlanSwingRaw(); } finally { mirrorBallState(S.ball); } } return cpuPlanSwingRaw(); }
+function cpuPlanSwingRaw() {
   const b = S.ball, vz = -b.vz;
   const at = z => { const r = simPitch([b.x, b.y, b.z], [b.vx, b.vy, b.vz], b.spin, z) || { t: (b.z - z) / Math.max(vz, 1), x: 9, y: -9 }; return [r.t, r.x, r.y]; };
   const [, xp] = at(PLATE_Z), [tc, , yc] = at(S.bat.bz + 0.3);
@@ -311,7 +342,18 @@ function cpuPlanSwing() {
 }
 
 /* ---------- pitch in flight, sub-stepped against the bat ---------- */
-function stepFlight(dt, script) {
+function stepFlight(dt, script) { // a lefty batter swings in his own (mirrored) frame
+  if (!batMirror()) return stepFlightRaw(dt, script);
+  const land0 = S.land, plate0 = S.atPlate, rec0 = S.contactRec;
+  mirrorBallState(S.ball);
+  const r = stepFlightRaw(dt, script);
+  mirrorBallState(S.ball);
+  if (S.land && S.land !== land0) S.land.x = -S.land.x;
+  if (S.atPlate && S.atPlate !== plate0) S.atPlate.x = -S.atPlate.x;
+  if (S.contactRec && S.contactRec !== rec0) { S.contactRec.ball.x = -S.contactRec.ball.x; S.contactRec.ball.vx = -S.contactRec.ball.vx; }
+  return r;
+}
+function stepFlightRaw(dt, script) {
   const b = S.ball, bt = S.bat;
   const human = !script && humanBats();
   // reach: the hitter extends for an outside pitch and pulls his hands in on an inside one, so the sweet spot lines up
@@ -329,7 +371,7 @@ function stepFlight(dt, script) {
     const zPrev = b.z, xPrev = b.x, yPrev = b.y;
     const ac = ballAccel(b); b.vx += ac[0] * hs; b.vy += ac[1] * hs; b.vz += ac[2] * hs;
     b.x += b.vx * hs; b.y += b.vy * hs; b.z += b.vz * hs;
-    if (b.y < BALL_R && b.vy < 0) { b.y = BALL_R; b.vy = -b.vy * 0.35; b.vx *= 0.6; b.vz *= 0.6; b.spin = [0, 0, 0]; }
+    if (b.y < BALL_R && b.vy < 0) { b.y = BALL_R; b.vy = -b.vy * 0.35; b.vx *= 0.6; b.vz *= 0.6; b.spin = [0, 0, 0]; b.kn = 0; }
     if (zPrev > PLATE_Z && b.z <= PLATE_Z && !S.atPlate) S.atPlate = { x: b.x, y: b.y };
     const zBat = bt.bz + 0.3; // where a hitter meets it: just out in front of him
     if (zPrev > zBat && b.z <= zBat && !S.atBat) S.atBat = { phi: bt.phi, w: bt.w, ballY: b.y, barrelY: bt.hy + Math.sin(bt.e) * BAT.L * 0.74 };
@@ -401,7 +443,7 @@ function tryContact() {
   b.vx = out[0]; b.vy = out[1]; b.vz = out[2];
   b.x = c[0] + n[0] * (HIT_R + 0.01); b.y = c[1] + n[1] * (HIT_R + 0.01); b.z = c[2] + n[2] * (HIT_R + 0.01);
   bt.w *= 0.72; // the ball pushes back on the bat
-  b.spin = [0, 0, 0];
+  b.spin = [0, 0, 0]; b.kn = 0;
   S.contacted = true;
   return true;
 }
@@ -415,7 +457,7 @@ function predictBatted() {
   let nextSample = 0;
   while (t < 9) {
     const s = Math.hypot(vx, vy, vz);
-    vx -= DRAG * s * vx * dt; vy -= (G + DRAG * s * vy) * dt; vz -= DRAG * s * vz * dt;
+    vx -= DRAG * s * vx * dt; vy -= (G * MODS.grav + DRAG * s * vy) * dt; vz -= DRAG * s * vz * dt;
     if (y > 1) { vx += WIND.x * dt; vz += WIND.z * dt; } // the wind carries a ball in the air
     const rPrev = hyp(x, z);
     x += vx * dt; y += vy * dt; z += vz * dt; t += dt;
@@ -460,7 +502,7 @@ function decideOutcome(p) {
   const fair = decideFair(p);
   const air = p.land && p.launchA >= 10 && hyp(p.land.x, p.land.z) >= 30;
   if (!fair) {
-    if (p.land && p.land.t > 1.6 && p.speed > 24) {
+    if (false && p.land && p.land.t > 1.6 && p.speed > 24) { // no foul outs: a foul is only ever a foul ball
       for (const i of [0, 1, 4]) {
         const f = S.fielders[i];
         const reach = f.spd * (p.land.t - 0.4);
@@ -578,7 +620,7 @@ function stepBatted(dt) {
     const N = 4, h = sdt / N;
     for (let i = 0; i < N; i++) {
       const s = Math.hypot(b.vx, b.vy, b.vz);
-      b.vx -= DRAG * s * b.vx * h; b.vy -= (G + DRAG * s * b.vy) * h; b.vz -= DRAG * s * b.vz * h;
+      b.vx -= DRAG * s * b.vx * h; b.vy -= (G * MODS.grav + DRAG * s * b.vy) * h; b.vz -= DRAG * s * b.vz * h;
       const rPrev = hyp(b.x, b.z);
       b.x += b.vx * h; b.y += b.vy * h; b.z += b.vz * h;
       const r = hyp(b.x, b.z);
@@ -740,7 +782,7 @@ function applyPitchCall() {
 }
 function hrDistance() {
   let { x, y, z, vx, vy, vz } = S.batted.startBall; let t = 0; const dt = 1 / 120;
-  while (y > 0 && t < 10) { const s = Math.hypot(vx, vy, vz); vx -= DRAG * s * vx * dt; vy -= (G + DRAG * s * vy) * dt; vz -= DRAG * s * vz * dt; x += vx * dt; y += vy * dt; z += vz * dt; t += dt; }
+  while (y > 0 && t < 10) { const s = Math.hypot(vx, vy, vz); vx -= DRAG * s * vx * dt; vy -= (G * MODS.grav + DRAG * s * vy) * dt; vz -= DRAG * s * vz * dt; x += vx * dt; y += vy * dt; z += vz * dt; t += dt; }
   return hyp(x, z);
 }
 function applyBattedOutcome(out) {

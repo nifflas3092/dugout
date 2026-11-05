@@ -148,6 +148,7 @@ canvas.layer { pointer-events: none; }
 .lb-list .n { font-family: var(--font-display); font-weight: 800; opacity: .7; }
 .lb-list .v { font-family: var(--font-display); font-weight: 800; font-size: 18px; }
 .lb-list small { opacity: .6; margin-left: 6px; }
+.hand-row { display: flex; flex-wrap: wrap; gap: 10px; }
 .perk-list { display: grid; gap: 8px; margin-top: 10px; }
 .perk-list button { text-align: left; padding: 12px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.06); color: inherit; font: inherit; cursor: pointer; }
 .perk-list button:hover, .perk-list button:focus-visible { border-color: var(--lamp); box-shadow: inset 0 0 0 1px var(--lamp); }
@@ -249,7 +250,7 @@ body.practice .ls-wrap, body.practice .count, body.practice .diamond { display: 
         <div class="seg" id="modeSeg">
           <button type="button" data-mode="online" aria-pressed="true"><strong>Online 1v1</strong><span>You and a rival, each on your own screen</span></button>
           <button type="button" data-mode="cpu" aria-pressed="false"><strong>Vs CPU</strong><span>Offline game. You bat first, then pitch</span></button>
-          <button type="button" data-mode="derby" aria-pressed="false"><strong>HR Derby</strong><span>10 outs. Anything but a homer is an out</span></button>
+          <button type="button" data-mode="derby" aria-pressed="false"><strong>HR Derby</strong><span>10 outs. Anything but a homer (or a foul) is an out</span></button>
           <button type="button" data-mode="bullpen" aria-pressed="false"><strong>Bullpen</strong><span>Just you on the mound. Work on your strikes</span></button>
           <button type="button" data-mode="targets" aria-pressed="false"><strong>HR Targets</strong><span>Derby with bullseyes past the wall. Hit them all before time runs out</span></button>
           <button type="button" data-mode="rogue" aria-pressed="false"><strong>Rogue-lite</strong><span>Score your way through stages, pick a perk after each. One run, no do-overs</span></button>
@@ -264,6 +265,13 @@ body.practice .ls-wrap, body.practice .count, body.practice .diamond { display: 
           <button type="button" data-inn="7" aria-pressed="false"><strong>7</strong></button>
         </div>
       </div>
+      <div id="handBox">
+        <div class="label">You</div>
+        <div class="row hand-row">
+          <div class="seg small" id="batsSeg"><button type="button" data-bats="R"><strong>Bats R</strong></button><button type="button" data-bats="L"><strong>Bats L</strong></button></div>
+          <div class="seg small" id="throwsSeg"><button type="button" data-throws="R"><strong>Throws R</strong></button><button type="button" data-throws="L"><strong>Throws L</strong></button></div>
+        </div>
+      </div>
       <div id="condBox">
         <div class="label">Park</div>
         <div class="seg small" id="parkSeg">
@@ -272,8 +280,8 @@ body.practice .ls-wrap, body.practice .count, body.practice .diamond { display: 
         </div>
         <div class="label" style="margin-top:10px">Weather</div>
         <div class="seg small wxseg" id="wxSeg">
-          <button type="button" data-wx="random"><strong>Random</strong></button>
           <button type="button" data-wx="sunny"><strong>Sunny</strong></button>
+          <button type="button" data-wx="random"><strong>Random</strong></button>
           <button type="button" data-wx="rain"><strong>Rain</strong></button>
           <button type="button" data-wx="snow"><strong>Snow</strong></button>
           <button type="button" data-wx="storm"><strong>Storm</strong></button>

@@ -38,8 +38,9 @@ function basis() {
   U = cross(F, R);
   focal = H / (2 * Math.tan(cam.fov * D2R / 2));
 }
-function toCam(p) { const v = sub(p, cam.pos); return [dotv(v, R), dotv(v, U), dotv(v, F)]; }
+function toCam(p) { if (MIRX) p = [-p[0], p[1], p[2]]; const v = sub(p, cam.pos); return [dotv(v, R), dotv(v, U), dotv(v, F)]; }
 function projC(c) { const s = focal / c[2]; return [W / 2 + c[0] * s + cam.sx, H / 2 - c[1] * s + cam.sy, s]; }
+let MIRX = false; // drawing a lefty: reflect his points across the middle of the field
 function P(p) { const c = toCam(p); if (c[2] < 0.25) return null; return projC(c); }
 function mouseRay(sx, sy) { const xn = (sx - W / 2) / focal, yn = (H / 2 - sy) / focal; return norm(addv(addv(F, mul(R, xn)), mul(U, yn))); }
 
@@ -88,8 +89,10 @@ const hooks = {
     bannerTimer = setTimeout(() => { el.hidden = true; }, size === 'huge' ? 2600 : 1600);
   },
   sound: play,
-  newGame() { // the park and weather for this game: your picks, or (online) the same random weather on both screens
-    if (S.mode === 'online' || rankedNext) applyConditions('stadium', 'random', S.gid);
+  newGame() { // the park and weather for this game: your picks, or (online) the same weather on both screens
+    S.myBats = menuBats; S.myThrows = menuThrows;
+    if (S.mode !== 'online') S.oppThrows = Math.random() < 0.25 ? 'L' : 'R'; // about one CPU pitcher in four is a lefty
+    if (S.mode === 'online' || rankedNext) applyConditions('stadium', 'sunny', S.gid);
     else if (!S.rogue) applyConditions(menuPark, menuWx);
   },
   spark(x, y, z, sp) { for (let i = 0; i < 14 + sp / 8; i++) { const v = norm([Math.random() - .5, Math.random() - .5, Math.random() - .5]), m = 6 + Math.random() * sp / 6; sparks.push({ p: [x, y, z], v: mul(v, m), life: 0.3 + Math.random() * 0.25 }); } },
@@ -187,8 +190,9 @@ function play(name) {
 }
 
 /* ---------- conditions: the park and the weather ---------- */
-let menuPark = 'stadium', menuWx = 'random';
-try { menuPark = localStorage.getItem('fpd-park') || 'stadium'; menuWx = localStorage.getItem('fpd-wx') || 'random'; } catch (_) {}
+let menuPark = 'stadium', menuWx = 'sunny', menuBats = 'R', menuThrows = 'R';
+try { menuBats = localStorage.getItem('fpd-bats') || 'R'; menuThrows = localStorage.getItem('fpd-throws') || 'R'; } catch (_) {}
+try { menuPark = localStorage.getItem('fpd-park') || 'stadium'; menuWx = localStorage.getItem('fpd-wx2') || 'sunny'; } catch (_) {}
 let PARK = 'stadium';
 const WX = { kind: 'sunny', label: 'Sunny', parts: [], flash: 0, nextBolt: 0, t: 0, funnel: 0, silly: '🦆', gustBase: [0, 0] };
 const WX_LABEL = { sunny: '☀ Sunny', rain: '🌧 Rain', snow: '❄ Snow', storm: '⛈ Thunderstorm', tornado: '🌪 Tornado warning', silly: '🦆 Silly weather' };
@@ -380,51 +384,78 @@ const PERKS = [
   { id: 'barrel', name: 'Big Barrel', text: 'A bigger sweet spot: 20% more room to square it up.', stack: true, take: R => { MODS.hitR *= 1.2; } },
   { id: 'juice', name: 'Juiced Bat', text: 'The ball comes off the bat 8% harder.', stack: true, take: R => { MODS.power *= 1.08; } },
   { id: 'outs', name: 'Extra Outs', text: '+2 outs every stage.', stack: true, take: R => { R.bonusOuts += 2; } },
-  { id: 'moon', name: 'Moonshot', text: 'Home runs are worth 6 instead of 4.', take: R => { R.val.hr = 6; } },
+  { id: 'moon', name: 'Moonshot', text: 'Home runs are worth 6 instead of 4.', take: R => { R.val.hr += 2; } },
   { id: 'gap', name: 'Gap Power', text: 'Doubles and triples are worth 1 more.', take: R => { R.val.double++; R.val.triple++; } },
-  { id: 'bloop', name: 'Bloop Bonus', text: 'Singles are worth 2.', take: R => { R.val.single = 2; } },
-  { id: 'foul', name: 'Foul Forgiveness', text: 'Foul balls stop costing you an out.', take: R => { R.foulFree = true; } },
+  { id: 'bloop', name: 'Bloop Bonus', text: 'Singles are worth 2.', take: R => { R.val.single = Math.max(R.val.single, 2); } },
   { id: 'tail', name: 'Tailwind', text: 'About 6 mph of wind blowing out, every stage.', stack: true, take: R => { R.tail++; } },
   { id: 'porch', name: 'Short Porch', text: 'The wall plays 4 ft shorter.', take: R => { R.porch = 4; } },
   { id: 'lob', name: 'Slow Lob', text: 'Pitches float in 15% slower: easier to time.', take: R => { MODS.ts *= 0.85; } },
   { id: 'umbrella', name: 'Umbrella', text: 'Sunny skies for the rest of the run.', take: R => { R.sunny = true; } },
-  { id: 'eye', name: 'Batting Eye', text: 'Swinging strikes are forgiven once per stage.', take: R => { R.eye = 1; } },
+  { id: 'eye', name: 'Batting Eye', text: 'One swing-and-miss per stage is free.', stack: true, take: R => { R.eye++; } },
+  { id: 'tape', name: 'Tape Measure', text: 'Home runs score +1 for every 40 ft past 250.', take: R => { R.tape = true; } },
+  { id: 'streak', name: 'Hot Streak', text: 'Each hit in a row is worth +1 more than the last (an out resets it).', take: R => { R.streakOn = true; } },
+  { id: 'second', name: 'Second Chance', text: 'Your first out each stage doesn’t count.', take: R => { R.second = true; } },
+  { id: 'clutch', name: 'Clutch Hitter', text: 'Down to your last out, every hit is worth double.', take: R => { R.clutch = true; } },
+  { id: 'lowg', name: 'Low Gravity', text: 'Everything floats: 15% less gravity (the pitches too).', take: R => { MODS.grav *= 0.85; } },
+  { id: 'rubber', name: 'Rubber Ball', text: 'The ball jumps 15% harder off the bat, but the sweet spot shrinks 10%.', take: R => { MODS.power *= 1.15; MODS.hitR *= 0.9; } },
+  { id: 'giant', name: 'Giant Bat', text: 'The sweet spot grows 35%, but hits come off 6% softer.', take: R => { MODS.hitR *= 1.35; MODS.power *= 0.94; } },
+  { id: 'glass', name: 'Glass Cannon', text: 'Home runs are worth double, but you get 2 fewer outs every stage.', take: R => { R.glass = true; R.bonusOuts -= 2; } },
+  { id: 'small', name: 'Small Ball', text: 'Singles are worth 3. Home runs drop to 3.', take: R => { R.val.single = 3; R.val.hr = Math.min(R.val.hr, 3); } },
+  { id: 'bank', name: 'Piggy Bank', text: 'Points past the target carry into the next stage.', take: R => { R.bank = true; } },
+  { id: 'eagle', name: 'Eagle Eye', text: 'Pitches come in as if it were two stages earlier.', stack: true, take: R => { R.ease += 2; } },
+  { id: 'coin', name: 'Coin Flip', text: 'Every out has a 1 in 3 chance of being called back.', take: R => { R.coin = true; } },
+  { id: 'scout', name: 'Scouting Report', text: 'No more knuckleballs from the CPU.', take: R => { R.noKnuck = true; } },
 ];
 const ROGUE = {
-  fresh: () => ({ stage: 1, pts: 0, total: 0, outs: 0, outsMax: 6, need: 5, bonusOuts: 0, val: { single: 1, double: 2, triple: 3, hr: 4 }, perks: [], tail: 0, porch: 0, foulFree: false, sunny: false, eye: 0, eyeLeft: 0, hr: 0, hits: 0 }),
+  fresh: () => ({ stage: 1, pts: 0, total: 0, outs: 0, outsMax: 6, need: 5, bonusOuts: 0, val: { single: 1, double: 2, triple: 3, hr: 4 }, perks: [], tail: 0, porch: 0, sunny: false, eye: 0, eyeLeft: 0, hr: 0, hits: 0,
+    tape: false, streakOn: false, streak: 0, second: false, secondLeft: false, clutch: false, glass: false, bank: false, ease: 0, coin: false, noKnuck: false, longest: 0 }),
   best() { try { return JSON.parse(localStorage.getItem('fpd-rogue-best') || 'null'); } catch (_) { return null; } },
   stageStart() {
-    const R = S.rogue;
-    R.need = 3 + 2 * R.stage; R.pts = 0; R.outs = 0; R.outsMax = 6 + R.bonusOuts; R.eyeLeft = R.eye;
+    const R = S.rogue, carry = R.bank ? Math.max(0, R.pts - R.need) : 0;
+    R.need = 3 + 2 * R.stage; R.pts = R.stage > 1 ? carry : 0; R.outs = 0; R.outsMax = Math.max(2, 6 + R.bonusOuts); R.eyeLeft = R.eye; R.secondLeft = R.second; R.streak = 0;
     applyConditions(menuPark, R.sunny ? 'sunny' : R.stage === 1 ? 'sunny' : 'random'); // weather rolls fresh every stage after the first
     FENCE_H = Math.max(3, FENCE_H - R.porch);
     gust(); updateWxLine();
   },
-  pitch() { // the CPU lobs get nastier as the stages go up: wider, more arc range, some spin
-    const k = Math.min(1, (S.rogue.stage - 1) / 6), r = Math.random;
+  pitch() { // the CPU lobs get nastier as the stages go up: wider, more arc range, some spin, and later the odd knuckleball
+    const R = S.rogue, k = Math.min(1, Math.max(0, R.stage - 1 - R.ease) / 6), r = Math.random;
     const spin = r() < 0.15 + 0.5 * k ? [3, (r() < 0.5 ? -1 : 1) * (2 + 4 * k), 0] : [3, 0, 0];
-    return computeLob((r() - 0.5) * (0.7 + 1.1 * k), -0.5 + r() * (1.2 + 0.8 * k), 8.4 - 2.2 * k + r() * (2.2 + 4.6 * k), spin);
+    const P = computeLob((r() - 0.5) * (0.7 + 1.1 * k), -0.5 + r() * (1.2 + 0.8 * k), 8.4 - 2.2 * k + r() * (2.2 + 4.6 * k), spin);
+    return !R.noKnuck && k > 0.3 && r() < 0.25 * k ? knuckleize(P, undefined, true) : P;
   },
   result(contact) {
     const R = S.rogue, P = S.prac;
     let res, out = null;
+    const outCall = (text) => {
+      R.streak = 0;
+      if (R.secondLeft) { R.secondLeft = false; return { text, sub: 'Second Chance: that one doesn’t count', size: 'small' }; }
+      if (R.coin && Math.random() < 1 / 3) return { text, sub: 'Coin Flip: called back, no out', size: 'small' };
+      R.outs++; return { text, sub: `out ${R.outs} of ${R.outsMax} · ${Math.max(0, R.need - R.pts)} points to go`, size: '' };
+    };
     if (contact) {
       P.swings++; out = S.batted.out;
-      const pts = R.val[out.type] || 0;
+      let pts = R.val[out.type] || 0;
       if (pts) {
+        let extra = '', dist = 0;
+        if (out.type === 'hr') {
+          R.hr++; dist = Math.round(hrDistance()); P.longest = Math.max(P.longest, dist); R.longest = Math.max(R.longest, dist);
+          if (R.tape && dist > 250) { const t = Math.floor((dist - 250) / 40); if (t) { pts += t; extra += ` · tape +${t}`; } }
+          if (R.glass) pts *= 2;
+        }
+        if (R.streakOn) { pts += R.streak; if (R.streak) extra += ` · streak +${R.streak}`; R.streak++; }
+        if (R.clutch && R.outs === R.outsMax - 1) { pts *= 2; extra += ' · clutch ×2'; }
         R.pts += pts; R.total += pts; R.hits++;
-        if (out.type === 'hr') { R.hr++; const d = Math.round(hrDistance()); P.longest = Math.max(P.longest, d); }
         const name = { single: 'Single', double: 'Double', triple: 'Triple', hr: 'Home run!' }[out.type];
-        res = { text: `${name} +${pts}`, sub: `${Math.min(R.pts, R.need)} of ${R.need} points`, size: out.type === 'hr' ? 'huge' : 'small' };
-      } else if (out.type === 'foul' && R.foulFree) res = { text: 'Foul', sub: 'forgiven · no out', size: 'small' };
-      else { R.outs++; res = { text: out.type === 'foul' ? 'Foul · out' : 'Out', sub: `out ${R.outs} of ${R.outsMax} · ${R.need - R.pts} points to go`, size: '' }; }
+        res = { text: `${name} +${pts}`, sub: (dist ? `${dist} ft · ` : '') + `${Math.min(R.pts, R.need)} of ${R.need} points` + extra, size: out.type === 'hr' ? 'huge' : 'small' };
+      } else if (out.type === 'foul') res = { text: 'Foul ball', sub: 'no harm done · swing again', size: 'small' };
+      else res = outCall('Out');
     } else if (S.swung) {
       P.swings++;
       if (R.eyeLeft > 0) { R.eyeLeft--; res = { text: 'Swing and miss', sub: 'Batting Eye: that one’s free', size: 'small' }; }
-      else { R.outs++; res = { text: 'Swing and miss', sub: `out ${R.outs} of ${R.outsMax}`, size: '' }; }
+      else res = outCall('Swing and miss');
     } else res = { text: 'Take', sub: 'wait for your pitch', size: 'small' };
     S.afterNext = R.pts >= R.need ? 'perk' : R.outs >= R.outsMax ? 'over' : 'next';
-    if (S.afterNext === 'perk') res = { text: `Stage ${R.stage} cleared!`, sub: res.text.replace(/!$/, '') + ` · ${R.total} points this run`, size: 'huge' };
+    if (S.afterNext === 'perk') res = { text: `Stage ${R.stage} cleared!`, sub: res.text.replace(/!$/, '') + (res.sub && /ft/.test(res.sub) ? ' · ' + res.sub.split(' · ')[0] : '') + ` · ${R.total} points this run`, size: 'huge' };
     return res;
   },
   offer() {
@@ -457,7 +488,7 @@ const ROGUE = {
   },
   stats() {
     const R = S.rogue;
-    return `<span><b>${R.pts}</b>/${R.need} points</span><span><b>${R.outs}</b>/${R.outsMax} outs</span><span><b>${R.total}</b> run total</span><span><b>${R.perks.length}</b> perks</span>`;
+    return `<span><b>${R.pts}</b>/${R.need} points</span><span><b>${R.outs}</b>/${R.outsMax} outs</span><span><b>${R.total}</b> run total</span><span><b>${R.longest || '—'}</b>${R.longest ? ' ft' : ''} longest HR</span><span><b>${R.perks.length}</b> perks</span>`;
   },
   over() {
     const R = S.rogue, cleared = R.stage - 1, prev = ROGUE.best();
@@ -466,7 +497,7 @@ const ROGUE = {
     $('overTitle').textContent = 'Run over';
     $('overScore').textContent = `Stage ${R.stage} · ${R.total} point${R.total === 1 ? '' : 's'}`;
     const names = R.perks.map(id => PERKS.find(p => p.id === id).name);
-    $('overNote').textContent = `${cleared} stage${cleared === 1 ? '' : 's'} cleared, ${R.hr} home run${R.hr === 1 ? '' : 's'}.` + (names.length ? ` Perks: ${names.join(', ')}.` : '') +
+    $('overNote').textContent = `${cleared} stage${cleared === 1 ? '' : 's'} cleared, ${R.hr} home run${R.hr === 1 ? '' : 's'}${R.longest ? ` (longest ${R.longest} ft)` : ''}.` + (names.length ? ` Perks: ${names.join(', ')}.` : '') +
       (better ? ' New personal best!' : prev ? ` Best: ${prev.cleared} stages, ${prev.total} points.` : '');
     $('rematchBtn').textContent = 'New run';
   },
@@ -489,7 +520,7 @@ function startPractice(mode) {
   hud();
   if (kind === 'rogue') hooks.banner('Stage 1', `score ${S.rogue.need} in ${S.rogue.outsMax} outs · 1B 1 · 2B 2 · 3B 3 · HR 4`, '');
   else if (kind === 'targets') hooks.banner('Home Run Targets', `hit all ${TARGET_COUNT} on the fly in ${TARGET_TIME / 60 >= 1 ? Math.floor(TARGET_TIME / 60) + ':' + String(TARGET_TIME % 60).padStart(2, '0') : TARGET_TIME + ' s'}`, '');
-  else hooks.banner(mode === 'derby' ? 'Home Run Derby' : 'Bullpen', mode === 'derby' ? `${DERBY_OUTS} outs · anything but a homer is an out` : 'throw strikes · the batter takes every pitch', '');
+  else hooks.banner(mode === 'derby' ? 'Home Run Derby' : 'Bullpen', mode === 'derby' ? `${DERBY_OUTS} outs · anything but a homer is an out (fouls are free)` : 'throw strikes · the batter takes every pitch', '');
   S.phase = 'wait';
   const gid = S.gid;
   setTimeout(() => { if (S.phase === 'wait' && S.gid === gid) nextPitch(); }, 1100);
@@ -512,7 +543,8 @@ function practiceResult(contact) {
       P.swings++;
       const out = S.batted.out;
       if (out.type === 'hr') { const d = Math.round(hrDistance()); P.hr++; P.longest = Math.max(P.longest, d); res = { text: 'Home run!', sub: `${d} ft · ${P.hr} so far`, size: 'huge' }; }
-      else { P.outs++; res = { text: out.type === 'foul' ? 'Foul · out' : 'Out', sub: `${P.outs} of ${DERBY_OUTS} · ${out.msg || out.note || out.type}`, size: '' }; }
+      else if (out.type === 'foul') res = { text: 'Foul ball', sub: 'no out · swing again', size: 'small' };
+      else { P.outs++; res = { text: 'Out', sub: `${P.outs} of ${DERBY_OUTS} · ${out.msg || out.note || out.type}`, size: '' }; }
     } else if (S.swung) { P.swings++; P.outs++; res = { text: 'Swing and miss', sub: `out ${P.outs} of ${DERBY_OUTS}`, size: '' }; }
     else res = { text: 'Take', sub: 'wait for your pitch', size: 'small' };
     S.afterNext = P.outs >= DERBY_OUTS ? 'over' : 'next';
@@ -544,8 +576,11 @@ function nextPitch() {
   if (S.over) { showOver(); return; }
   S.aim = null; S.aimPreview = null;
   if (humanPitches()) { S.phase = 'windup'; S.arm.a = -95 * D2R; S.arm.w = 0; } // start neutral, arm at the side
-  else if (S.mode === 'cpu') startOppWindup(cpuPickPitch(), 0.95);
-  else if (S.mode === 'derby') startOppWindup(S.rogue ? ROGUE.pitch() : derbyPitch(), 0.95);
+  else if (S.mode === 'cpu' || S.mode === 'derby') { // the CPU pitches as a righty; a lefty gets the mirror image
+    let P = S.mode === 'cpu' ? cpuPickPitch() : S.rogue ? ROGUE.pitch() : derbyPitch();
+    if (S.mode === 'cpu' && Math.random() < 0.1) P = knuckleize(P, undefined, true); // now and then a knuckler
+    startOppWindup(pitMirror() ? mirrorPitch(P) : P, 0.95);
+  }
   else {
     S.phase = 'waitPitch';
     const m = net.pending; net.pending = null;
@@ -554,13 +589,14 @@ function nextPitch() {
   netPresence();
 }
 function startOppWindup(P, dur) { S.phase = 'oppWindup'; S.timer = 0; S.oppPitch = P; S.windDur = dur; }
-function releaseMyPitch(P) { S.phase = 'throwing'; S.timer = 0; S.myPitch = P; S.throwFrom = S.arm.a; }
+function releaseMyPitch(P) { S.phase = 'throwing'; S.timer = 0; S.myPitch = S.mode === 'online' ? roundP(P) : P; S.throwFrom = S.arm.a; } // online: throw exactly what the rival will see
 function afterMyLaunch() {
   if (S.mode !== 'online') { beginFlight(); return; }
   S.phase = 'waitPlay'; S.hideBall = true;
-  net.lastPitchMsg = { gid: S.gid, seq: S.seq + 1, P: S.myPitch };
+  net.lastPitchMsg = { gid: S.gid, seq: S.seq + 1, P: roundP(S.myPitch), th: S.myThrows || 'R' };
   net.pitchSentAt = performance.now();
-  net.rm && net.rm.emit('pitch', net.lastPitchMsg).catch(netErr);
+  net.lastOut = { k: 'pitch', ...net.lastPitchMsg }; netPresence(); // the reliable copy: presence is re-sent until the rival has it
+  net.rm && net.rm.emit('pitch', net.lastPitchMsg).catch(netErr); // the fast copy
 }
 function beginFlight() {
   S.phase = 'flight'; S.t = 0; S.tReal = 0; S.rec = []; S.recNext = 0;
@@ -627,7 +663,7 @@ const ordinal = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 > 10 && n % 100 < 14
 /* ---------- online ---------- */
 const net = { room: null, rm: null, code: null, seat: 0, opp: null, unsub: [], pending: null, lastPlay: null, lastPitchMsg: null, pitchSentAt: 0, behindSince: 0, lastSyncAt: 0, joining: false };
 const round = (v, d = 1000) => Math.round(v * d) / d;
-const roundP = P => ({ p: P.p.map(v => round(v)), v: P.v.map(v => round(v)), spin: (P.spin || [0, 0, 0]).map(v => round(v)), ax: round(P.ax || 0), mph: P.mph, releaseA: round(P.releaseA) });
+const roundP = P => ({ p: P.p.map(v => round(v)), v: P.v.map(v => round(v)), spin: (P.spin || [0, 0, 0]).map(v => round(v)), ax: round(P.ax || 0), mph: P.mph, releaseA: round(P.releaseA), kn: P.kn || 0, kp: round(P.kp || 0) });
 function netErr(e) { if (e && (e.code === 'not_permitted' || e.code === 'not_granted') && !net.denied) { net.denied = true; lobbyUI(); hooks.banner('Not connected', 'you need “can contribute” access to play online', ''); } }
 function codeOk(c) { return /^[a-z0-9]{4,8}$/.test(c); }
 function newCode() { const a = 'abcdefghjkmnpqrstuvwxyz23456789'; let s = ''; for (let i = 0; i < 5; i++) s += a[Math.floor(Math.random() * a.length)]; return s; }
@@ -646,6 +682,7 @@ async function joinCode(code, seat) {
   net.unsub.push(rm.onPeers(ch => {
     net.opp = ch.peers.find(p => !p.sameTab && p.presence && p.presence.seat === 1 - net.seat) || null;
     if (net.opp && S && S.mode === 'online' && S.phase === 'lobbyWait') beginGameUI();
+    if (net.opp) fromPresence(net.opp.presence);
     lobbyUI();
   }));
   netPresence();
@@ -657,10 +694,28 @@ function leaveOnline() {
   if (net.rm) net.rm.leave().catch(() => {});
   net.rm = null; net.opp = null; net.code = null; net.pending = null; net.lastPlay = null;
 }
+/* Every message also rides in presence: the platform keeps each player's presence, hands it to whoever (re)joins and
+   re-sends it after a dropped connection, so a lost 'pitch' or 'play' can't freeze the game, and it works even for
+   players who can only set presence. The emitted copy is just the fast path. */
 function netPresence() {
   if (!net.rm) return;
   const inGame = S && S.mode === 'online';
-  net.rm.presence({ seat: net.seat, gid: inGame ? S.gid : null, started: inGame ? S.started : 0, seq: inGame ? S.seq : 0 }).catch(() => {});
+  const pr = { seat: net.seat, gid: inGame ? S.gid : null, started: inGame ? S.started : 0, seq: inGame ? S.seq : 0, bats: menuBats, throws: menuThrows,
+    snap: inGame ? snapshot() : null, out: inGame && net.lastOut && net.lastOut.gid === S.gid ? net.lastOut : null };
+  if (pr.out && pr.out.rec) { const o = pr.out = { ...pr.out }; while (JSON.stringify(pr).length > 3800 && o.rec.length > 4) o.rec = o.rec.filter((_, i) => i % 2 === 0); }
+  if (JSON.stringify(pr).length > 3900) pr.snap = null;
+  net.rm.presence(pr).catch(() => {});
+}
+function fromPresence(p) {
+  if (!p) return;
+  if (S && S.mode === 'online') { if (p.bats === 'L' || p.bats === 'R') S.oppBats = p.bats; if (p.throws === 'L' || p.throws === 'R') S.oppThrows = p.throws; }
+  const o = p.out;
+  if (o && o.k === 'pitch') onRemotePitch(o);
+  else if (o && o.k === 'play') onRemotePlay(o.snap ? o : { ...o, snap: p.snap });
+  // far behind (a reload, or several messages lost): jump straight to their state. One step behind is normal: the next pitch or play brings it.
+  const sn = p.snap;
+  const behind = sn && typeof sn.gid === 'string' && (!S || S.mode !== 'online' ? true : sn.gid !== S.gid ? sn.started > S.started : sn.seq > S.seq + 1);
+  if (behind && !(S && S.replay)) onRemoteSync({ snap: sn });
 }
 function snapNewer(o) {
   if (!S || S.mode !== 'online') return true;
@@ -680,6 +735,7 @@ function onRemoteSync(d) {
 }
 function onRemotePitch(d) {
   if (!S || S.mode !== 'online' || !d || d.gid !== S.gid || humanPitches()) return;
+  if (d.th === 'L' || d.th === 'R') S.oppThrows = d.th;
   if (d.seq === S.seq + 1) {
     if (S.phase === 'waitPitch') startOppWindup(d.P, 0.8);
     else if (!['oppWindup', 'flight', 'batted'].includes(S.phase)) net.pending = d;
@@ -697,6 +753,7 @@ function sendPlay(result) {
   };
   while (JSON.stringify(msg).length > 3900 && msg.rec.length > 8) msg.rec = msg.rec.filter((_, i) => i % 2 === 0);
   net.lastPlay = msg;
+  net.lastOut = { k: 'play', ...msg, snap: undefined }; netPresence(); // presence already carries the snapshot
   net.rm && net.rm.emit('play', msg).catch(netErr);
 }
 function onRemotePlay(d) {
@@ -709,7 +766,7 @@ function onRemotePlay(d) {
 }
 function resetBallTo(P) {
   const b = S.ball;
-  b.x = P.p[0]; b.y = P.p[1]; b.z = P.p[2]; b.vx = P.v[0]; b.vy = P.v[1]; b.vz = P.v[2]; b.ax = P.ax;
+  b.x = P.p[0]; b.y = P.p[1]; b.z = P.p[2]; b.vx = P.v[0]; b.vy = P.v[1]; b.vz = P.v[2]; b.ax = P.ax; b.spin = P.spin ? [...P.spin] : [0, 0, 0]; b.mx = 1; b.kn = P.kn || 0; b.kp = P.kp || 0;
   S.inHand = false; S.caughtByCatcher = false; S.atPlate = null; S.contacted = false;
 }
 function replayBat(t) {
@@ -753,7 +810,8 @@ function netTick(now) {
 const SWING_MAP = { lo: -120 * D2R, hi: 135 * D2R };
 function handsFromMouse() {
   if (!mouse.seen) return;
-  const fx = clamp((mouse.sx / W - 0.08) / 0.84, 0, 1), fy = clamp((mouse.sy / H - 0.15) / 0.7, 0, 1);
+  const mxs = batMirror() ? W - mouse.sx : mouse.sx; // a lefty loads to the other side
+  const fx = clamp((mxs / W - 0.08) / 0.84, 0, 1), fy = clamp((mouse.sy / H - 0.15) / 0.7, 0, 1);
   S.bat.phiT = SWING_MAP.lo + (SWING_MAP.hi - SWING_MAP.lo) * fx;
   S.bat.ty = BAT.box.y1 - (BAT.box.y1 - BAT.box.y0) * fy;
 }
@@ -805,7 +863,8 @@ function sidePlaneHit(sx, sy) { // the vertical plane the throwing arm moves in,
   return [p[1], p[2]];
 }
 const keys = new Set();
-addEventListener('keydown', e => { if (e.target && e.target.tagName === 'INPUT') return; const k = e.key.toLowerCase(); keys.add(k); if (k.startsWith('arrow') && $('menu').hidden) e.preventDefault(); });
+addEventListener('keydown', e => { if (e.target && e.target.tagName === 'INPUT') return; const k = e.key.toLowerCase(); keys.add(k);
+  if (k === 'k' && !e.repeat && S && humanPitches() && S.phase === 'windup') { S.knuck = !S.knuck; hooks.banner(S.knuck ? 'Knuckleball' : 'Normal grip', S.knuck ? 'slower, no spin, it wobbles' : 'sweep to curve it', 'small'); } if (k.startsWith('arrow') && $('menu').hidden) e.preventDefault(); });
 addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 addEventListener('blur', () => keys.clear());
 function zoneHit(sx, sy) {
@@ -829,7 +888,7 @@ function update(dt) {
     handsFromMouse();
     const dx = (keys.has('d') || keys.has('arrowright') ? 1 : 0) - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
     const dz = (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
-    if (dx || dz) walkBatter(dt, dx, dz);
+    if (dx || dz) walkBatter(dt, batMirror() ? -dx : dx, dz);
   } else if (!humanBats()) S.bat.phiT = undefined;
   if (batLive && S.phase !== 'flight') idleBat(dt);
 
@@ -839,11 +898,13 @@ function update(dt) {
       const held = S.grip && mouse.down;
       // neutral: the arm hangs at the side. Down swings it back, up swings it through toward the plate.
       const tgt = held ? clamp(-90 + ((mouse.sy - S.grip.y0) / (H * 0.2)) * 60, -155, -20) * D2R : -95 * D2R;
-      const lat = held ? ((mouse.sx - S.grip.x0) / (H * 0.2)) * 0.6 : 0; // screen right moves the hand to the pitcher's left
-      const leanT = (keys.has('a') || keys.has('arrowleft') ? 1 : 0) - (keys.has('d') || keys.has('arrowright') ? 1 : 0);
-      S.lean = (S.lean || 0) + (leanT - (S.lean || 0)) * Math.min(1, dt * 5); // A leans left, D leans right
+      const m = pitMirror() ? -1 : 1; // a lefty is worked out as a mirrored righty
+      const lat = held ? ((mouse.sx - S.grip.x0) / (H * 0.2)) * 0.6 * m : 0; // the hand follows the mouse across the screen
+      const leanW = (keys.has('a') || keys.has('arrowleft') ? 1 : 0) - (keys.has('d') || keys.has('arrowright') ? 1 : 0);
+      const leanT = Math.min(0, leanW * m); // you can only lean toward your throwing hand (D for a righty, A for a lefty)
+      S.lean = (S.lean || 0) + (leanT - (S.lean || 0)) * Math.min(1, dt * 5);
       stepHoldArm(dt, tgt, lat);
-      const h = handPos(); S.ball.x = h[0]; S.ball.y = h[1]; S.ball.z = h[2];
+      const h = handWorld(); S.ball.x = h[0]; S.ball.y = h[1]; S.ball.z = h[2];
       break;
     }
     case 'throwing': case 'oppWindup': {
@@ -858,7 +919,7 @@ function update(dt) {
         S.oppStride = u < 0.6 ? 0 : ease((u - 0.6) / 0.4);
       }
       S.arm.w = (S.arm.a - prev) / dt;
-      const h = handPos(); S.ball.x = h[0]; S.ball.y = h[1]; S.ball.z = h[2];
+      const h = handWorld(); S.ball.x = h[0]; S.ball.y = h[1]; S.ball.z = h[2];
       if (u >= 1) { if (!mine) S.arm.a = P.releaseA > -60 * D2R ? -130 * D2R : P.releaseA; launchExact(P); hud(); if (mine) afterMyLaunch(); else beginFlight(); }
       break;
     }
@@ -935,7 +996,7 @@ function trail() { S.trail.push([S.ball.x, S.ball.y, S.ball.z]); if (S.trail.len
 
 /* ---------- prompt + hint ---------- */
 let lastPrompt = null, lastHint = '';
-const HINT_PITCH = `<b>Pitching:</b> to curve it, sweep the mouse left or right as you let go: the faster the sweep, the bigger the break, and it breaks the way you swept. The wind pushes the ball too (the arrow in the box shows it; the ring shows a still day). Hold A or D to lean left or right and change the angle. Hold the left button and the arm is yours: mouse down swings it back, up swings it through, left and right moves the hand out to the side. Let go while it's coming through. The pitch goes as fast as the arm is really swinging; let go earlier for a flatter pitch, later for more arc. The ring on the dirt and the box show where it lands if you let go now. Arc it 6 to 16 ft and drop it on the plate or plywood board for a strike. `;
+const HINT_PITCH = `<b>Pitching:</b> to curve it, sweep the mouse left or right as you let go: the faster the sweep, the bigger the break, and it breaks the way you swept. Press K to grip a knuckleball (slower, no spin, it wobbles on the way in; press K again to go back). The wind pushes the ball too (the arrow in the box shows it; the ring shows a still day). Hold D (right-hander) or A (left-hander) to lean out toward your throwing hand and change the angle. Hold the left button and the arm is yours: mouse down swings it back, up swings it through, left and right moves the hand out to the side. Let go while it's coming through. The pitch goes as fast as the arm is really swinging; let go earlier for a flatter pitch, later for more arc. The ring on the dirt and the box show where it lands if you let go now. Arc it 6 to 16 ft and drop it on the plate or plywood board for a strike. `;
 const HINT_BAT = `<b>Batting:</b> the pitch drops in on an arc. A/D (or ←/→) step toward or away from the plate, W/S (or ↑/↓) move up or back in the box. Mouse left and right drives the bat around your body with no lag: far left is loaded by your back shoulder, the middle is through the zone, far right is the follow-through. Up and down sets the height. Move fast to swing hard. The ring slides left and right to wherever the pitch is crossing, and once the pitch starts dropping a ring on the ground shows where it will land; you set the height and the timing. Match the height of the ball as it comes down: square it up and it jumps, catch the top and it's a grounder, the bottom and it's a pop-up. Swinging all-out hits it harder but makes it harder to square up. Early pulls it, late goes the other way. Take a pitch that lands on the plate or board and it's a strike.`;
 function prompt() {
   let p = '', h = '';
@@ -944,8 +1005,11 @@ function prompt() {
     case 'lobbyWait': p = `Waiting for your rival · code <b>${net.code || ''}</b>`; h = 'Send your rival the code. They open this page, pick Online 1v1 and join with it.'; break;
     case 'windup':
       p = !S.grip ? '<b>Hold the button</b> to take the ball' : S.arm.w < -4 ? 'Let go when the ring is <b>on the board</b>' : 'Pull <b>down</b> to bring it back, then <b>swing up</b>';
-      { const R = S.grip && mouse.down ? flickPreview() : null, cv = R && R.curve || 0, ln = S.lean || 0, bits = [];
-        if (Math.abs(cv) > 0.12) bits.push(`curving <b>${cv > 0 ? 'out' : 'in'} ${Math.round(Math.abs(cv) * 100)}%</b>`);
+      { const R = S.grip && mouse.down ? flickPreview() : null, cv = R && R.spin ? R.spin[1] / CURVE.max : 0, ln = (S.lean || 0) * (pitMirror() ? -1 : 1), bits = [];
+        if (S.knuck) bits.push('<b>knuckleball</b>');
+        else if (Math.abs(cv) > 0.12) { // +y sidespin breaks toward -x: screen right from the mound, the side a righty bats on
+          const right = cv > 0, batterRight = !batMirror();
+          bits.push(`breaking <b>${right ? 'right' : 'left'} ${Math.round(Math.abs(cv) * 100)}%</b> (${right === batterRight ? 'in' : 'away'})`); }
         if (Math.abs(ln) > 0.15) bits.push(`leaning <b>${ln > 0 ? 'left' : 'right'}</b>`);
         if (bits.length) p += ' · ' + bits.join(' · '); }
       h = HINT_PITCH; break;
@@ -1320,21 +1384,73 @@ function drawStatic(moving) {
   for (const s of [-1, 1]) { line3([s * POLE, 0, POLE], [s * POLE, 34, POLE], 0.6, '#f2c230'); poly([[s * POLE, 10, POLE], [s * (POLE + 2.5), 10, POLE + 2.5], [s * (POLE + 2.5), 32, POLE + 2.5], [s * POLE, 32, POLE]], 'rgba(242,194,48,.55)'); }
   }
 }
-/* Hampton Park (Ottawa) for the classic view: lawn and a ring of trees, chain-link, light towers, the Queensway wall */
-const HAMPTON_TREES = (() => { let sd = 99; const r = () => { sd = (sd * 1103515245 + 12345) & 0x7fffffff; return sd / 0x7fffffff; }; const out = [];
-  for (let i = 0; i < 70; i++) { const a = (-150 + r() * 300) * D2R, d = 290 + r() * 170; if (a < -25 * D2R && a > -70 * D2R && d > 330) continue; out.push({ a, d, h: 26 + r() * 26, c: ['#2f6b2a', '#3d7d30', '#4f8d38'][i % 3] }); }
-  return out; })();
+/* Hampton Park (Ottawa), laid out from the satellite view. Home plate is Hampton Park Field #1, facing north
+   (+z north, +x east, about 2.6 ft per real metre of map, so the field matches our 250 ft fence):
+   the Queensway (417) runs SW to NE past the first-base side, Field #2 sits out past right-centre against the highway,
+   the wading pool and its parking lot are past left-centre, the grocery store and the Sebring Ave plaza are behind
+   third base, the old-growth woods fill everything north, and Parkview Rd's houses back onto the park to the west. */
+const HAMPTON = (() => { let sd = 99; const r = () => { sd = (sd * 1103515245 + 12345) & 0x7fffffff; return sd / 0x7fffffff; };
+  const hw = { p0: [260, -26], u: [0.61, 0.79], n: [0.79, -0.61], w: 125, t0: -760, t1: 1250 }; // the Queensway: west edge, along, across (away from the park)
+  const offHw = (x, z) => (x - hw.p0[0]) * hw.n[0] + (z - hw.p0[1]) * hw.n[1]; // >0: on the highway side of its west edge
+  const trees = [], cols = ['#2f6b2a', '#3d7d30', '#4f8d38', '#2a5f2c'];
+  const add = (x, z, big = 1) => { if (offHw(x, z) > -12) return; trees.push({ x, z, h: (30 + r() * 30) * big, cr: (12 + r() * 9) * big, c: cols[(r() * 4) | 0] }); };
+  for (let i = 0; i < 240; i++) { // the woods: trees over 250 years old, with a dog-walkers' path up the middle
+    const x = -470 + r() * 900, z = 500 + r() * 820;
+    if (Math.abs(x - (-30 + (z - 450) * 0.18)) < 16) continue;
+    if (x > 230 && z > 640) continue; // the open grass and the dog run toward Island Park Dr
+    if (Math.hypot(x - 338, z - 351) < 260) continue; // Field #2
+    add(x, z, 1.1);
+  }
+  for (let i = 0; i < 34; i++) add(-330 + r() * 120, -10 + r() * 520);           // the treed strip between the field and the back yards
+  for (let i = 0; i < 26; i++) { const t = -380 + r() * 980, o = -22 - r() * 26; add(hw.p0[0] + hw.u[0] * t + hw.n[0] * o, hw.p0[1] + hw.u[1] * t + hw.n[1] * o, 0.8); } // along the highway
+  for (let i = 0; i < 10; i++) add(-120 + r() * 220, 470 + r() * 40, 0.9);      // round the pool
+  const houses = [], walls = ['#d8cbb3', '#b9a690', '#e4e0d6', '#9fa9b0', '#c49a7a'], roofs = ['#4a4d52', '#6b3e2e', '#3f4a3a'];
+  for (const x of [-470, -545, -700, -775]) for (let z = -60; z < 1080; z += 52 + r() * 10) houses.push({ x: x + (r() - 0.5) * 8, z, w: 30 + r() * 10, d: 34 + r() * 10, h: 18 + r() * 8, wall: walls[(r() * 5) | 0], roof: roofs[(r() * 3) | 0] });
+  return {
+    hw, offHw, trees, houses,
+    field2: [338, 351],
+    grocery: { x: -215, z: -125, w: 210, d: 160, h: 26, ang: 35 * D2R },
+    plaza: { x: -585, z: -160, w: 400, d: 70, h: 20, ang: 20 * D2R },
+    lots: [ [[-210, 270], [70, 270], [70, 390], [-210, 390]],                                // the pool's lot, past left-centre
+            [[-470, -200], [-60, -330], [-110, -470], [-520, -340]] ],                       // the plaza and grocery lot
+    pool: { x: -20, z: 425, w: 64, d: 46 }, poolHouse: { x: -95, z: 405, w: 44, d: 28, h: 12 },
+    dog: [[430, 640], [620, 640], [620, 760], [430, 760]],
+    lights: [[-62, 150], [62, 150], [-38, 275], [38, 275], [-105, 70], [105, 70]],
+  };
+})();
 function drawHampton2D(moving) {
-  const sp = (a, r, y) => [Math.sin(a) * r, y, Math.cos(a) * r];
+  const sp = (a, r, y) => [Math.sin(a) * r, y, Math.cos(a) * r], H_ = HAMPTON, hw = H_.hw;
   poly([...arc(0, 0, FENCE_R, -80 * D2R, 80 * D2R, 30, 0), ...arc(0, 0, 1400, 80 * D2R, -80 * D2R, 30, 0)], '#4c8a3c'); // the park lawn
-  // the Queensway's sound wall past left field
-  poly([sp(-72 * D2R, 520, 0), sp(-22 * D2R, 520, 0), sp(-22 * D2R, 520, 16), sp(-72 * D2R, 520, 16)], '#aeb2b3');
+  for (const lot of H_.lots) poly(lot.map(([x, z]) => [x, 0.05, z]), '#6d7176');
+  const hwp = (t, o, y = 0.06) => [hw.p0[0] + hw.u[0] * t + hw.n[0] * o, y, hw.p0[1] + hw.u[1] * t + hw.n[1] * o];
+  poly([hwp(hw.t0, -6), hwp(hw.t1, -6), hwp(hw.t1, hw.w + 6), hwp(hw.t0, hw.w + 6)], '#55595e');
+  poly([hwp(hw.t0, 61, 0.1), hwp(hw.t1, 61, 0.1), hwp(hw.t1, 63, 0.1), hwp(hw.t0, 63, 0.1)], '#c9ccce');
+  for (const o of [0, hw.w]) { const a0 = hwp(hw.t0, o, 0), a1 = hwp(hw.t1, o, 0); poly([a0, a1, [a1[0], 3, a1[2]], [a0[0], 3, a0[2]]], '#b5b8ba'); }
+  // the pool, its changing rooms, the grocery store and the plaza behind third
+  const P_ = H_.pool; poly([[P_.x - P_.w / 2, 0.08, P_.z - P_.d / 2], [P_.x + P_.w / 2, 0.08, P_.z - P_.d / 2], [P_.x + P_.w / 2, 0.08, P_.z + P_.d / 2], [P_.x - P_.w / 2, 0.08, P_.z + P_.d / 2]], '#5fb7e0');
+  const box2 = (c, w, d, h, ang, wall, roof) => {
+    const cs = Math.cos(ang), sn = Math.sin(ang), k = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([i, j]) => [c[0] + (i * w / 2) * cs + (j * d / 2) * sn, c[1] - (i * w / 2) * sn + (j * d / 2) * cs]);
+    const walls = [0, 1, 2, 3].map(i => { const a0 = k[i], a1 = k[(i + 1) % 4]; return { q: [[a0[0], 0, a0[1]], [a1[0], 0, a1[1]], [a1[0], h, a1[1]], [a0[0], h, a0[1]]], d: toCam([(a0[0] + a1[0]) / 2, h / 2, (a0[1] + a1[1]) / 2])[2] }; }).sort((x, y) => y.d - x.d);
+    for (const w_ of walls) poly(w_.q, wall, 'rgba(0,0,0,.15)');
+    poly(k.map(([x, z]) => [x, h, z]), roof);
+  };
+  const G_ = H_.grocery, Pl = H_.plaza, PH = H_.poolHouse;
+  box2([G_.x, G_.z], G_.w, G_.d, G_.h, G_.ang, '#cdbf9f', '#8e9196');
+  box2([Pl.x, Pl.z], Pl.w, Pl.d, Pl.h, Pl.ang, '#a8574a', '#7d8187');
+  box2([PH.x, PH.z], PH.w, PH.d, PH.h, 0, '#d9d2c2', '#5c636b');
+  // Field #2: its sand infield and backstop, out past right-centre
+  const [f2x, f2z] = H_.field2;
+  poly([[f2x, 0.07, f2z], ...arc(f2x, f2z, 80, -52 * D2R, 52 * D2R, 16, 0.07)], '#c9a46a');
+  for (let i = 0; i < 6; i++) { const b0 = (140 + i * 13) * D2R, b1 = (153 + i * 13) * D2R; poly([sp(b0, 28, 0), sp(b1, 28, 0), sp(b1, 28, 16), sp(b0, 28, 16)].map(q => [q[0] + f2x, q[1], q[2] + f2z]), 'rgba(60,66,74,.2)'); }
+  // the houses backing onto the park, far ones first
+  const hs = H_.houses.map(h => ({ h, d: toCam([h.x, 10, h.z])[2] })).filter(o => o.d > 5).sort((a, b) => b.d - a.d);
+  for (const { h } of hs) { box2([h.x, h.z], h.w, h.d, h.h, 0, h.wall, h.roof); }
   // trees, far ones first
-  const trees = HAMPTON_TREES.map(t => ({ t, d: toCam(sp(t.a, t.d, t.h))[2] })).filter(o => o.d > 2).sort((a, b) => b.d - a.d);
+  const trees = H_.trees.map(t => ({ t, d: toCam([t.x, t.h, t.z])[2] })).filter(o => o.d > 2).sort((a, b) => b.d - a.d);
   for (const { t } of trees) {
-    const base = P(sp(t.a, t.d, 0)), top = P(sp(t.a, t.d, t.h)); if (!base || !top) continue;
+    const base = P([t.x, 0, t.z]), top = P([t.x, t.h, t.z]); if (!base || !top) continue;
     ctx.strokeStyle = '#5b4636'; ctx.lineWidth = Math.max(1, 1.6 * base[2]); ctx.beginPath(); ctx.moveTo(base[0], base[1]); ctx.lineTo(top[0], top[1] + 8 * top[2]); ctx.stroke();
-    ctx.fillStyle = t.c; ctx.beginPath(); ctx.ellipse(top[0], top[1], Math.max(3, 13 * top[2]), Math.max(3, 11 * top[2]), 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = t.c; ctx.beginPath(); ctx.ellipse(top[0], top[1], Math.max(3, t.cr * 1.1 * top[2]), Math.max(3, t.cr * top[2]), 0, 0, Math.PI * 2); ctx.fill();
   }
   // light towers
   for (const [ang, r] of [[-62, 150], [62, 150], [-38, 275], [38, 275]]) { line3(sp(ang * D2R, r, 0), sp(ang * D2R, r, 72), 0.6, '#7c858f'); const q = P(sp(ang * D2R, r, 72)); if (q) { ctx.fillStyle = '#dfe3e8'; ctx.fillRect(q[0] - 5 * q[2], q[1] - 2 * q[2], 10 * q[2], 4 * q[2]); } }
@@ -1600,8 +1716,8 @@ function drawBatStick(hands) {
     poly(pts, 'rgba(243,234,210,.12)');
   }
   line3(addv(hands, mul(d, -0.2)), addv(hands, mul(d, 0.95)), 0.11, '#1b1b1b');
-  line3(addv(hands, mul(d, 0.95)), addv(hands, mul(d, BAT.L)), 0.21, '#c9ced6');
-  line3(addv(hands, mul(d, 1.6)), addv(hands, mul(d, 2.15)), 0.215, '#e2553f');
+  line3(addv(hands, mul(d, 0.95)), addv(hands, mul(d, BAT.L)), 0.25, '#c9ced6');
+  line3(addv(hands, mul(d, 1.6)), addv(hands, mul(d, 2.15)), 0.255, '#e2553f');
 }
 function drawPitcher() {
   const t = fieldingTeam(), col = teamCol(t), dk = teamDark(t);
@@ -1830,8 +1946,9 @@ void main(){
     return t;
   }
   const jerseyTex = {};
+  let mirror = false; const setMirror = v => { mirror = !!v; };
   function jersey(t, num) { // the jersey wraps around the torso: back number at u=.25, front at u=.75, drawn mirrored for the world's handedness
-    const k = t + '-' + num; if (jerseyTex[k]) return jerseyTex[k];
+    const mir = mirror, k = t + '-' + num + (mir ? 'm' : ''); if (jerseyTex[k]) return jerseyTex[k];
     const c = document.createElement('canvas'); c.width = 512; c.height = 256; const g = c.getContext('2d'); g.scale(2, 2);
     g.fillStyle = '#fff'; g.fillRect(0, 0, 256, 128);
     if (teamPin(t)) { g.fillStyle = 'rgba(31,58,107,.55)'; for (let x = 3; x < 256; x += 9) g.fillRect(x, 0, 1.6, 128); }
@@ -1842,10 +1959,11 @@ void main(){
     g.fillStyle = 'rgba(0,0,0,.25)'; for (let y = 14; y < 112; y += 18) { g.beginPath(); g.arc(64 + 11.2, y, 1.4, 0, Math.PI * 2); g.fill(); } // buttons
     g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineJoin = 'round';
     const NAMES = ['MORALES', 'KOWALSKI', 'BRENNAN', 'OKAFOR', 'DUBOIS', 'HARTLEY', 'NAKAMURA', 'REYES', 'LINDQVIST', 'CALLOWAY', 'PETRAKIS', 'WHITLOCK', 'SANTANA', 'MCBRIDE', 'FONTAINE', 'GALLAGHER'];
-    g.font = `800 15px ${FONT_D}`; g.fillStyle = ink; g.fillText(NAMES[num % NAMES.length], 192, 30); // name across the shoulders
-    g.font = `900 52px ${FONT_D}`; g.lineWidth = 7; g.strokeStyle = '#fff'; g.strokeText(String(num), 192, 70); g.fillStyle = ink; g.fillText(String(num), 192, 70);
-    g.font = `900 22px ${FONT_D}`; g.fillStyle = ink; g.fillText(t ? 'DUEL' : 'ROAD', 64, 52);
-    g.font = `900 20px ${FONT_D}`; g.fillText(String(num), 78, 80);
+    const T = (fn, str, x, y) => { if (!mir) return g[fn](str, x, y); g.save(); g.translate(x, y); g.scale(-1, 1); g[fn](str, 0, 0); g.restore(); }; // a mirrored body needs its lettering flipped back
+    g.font = `800 15px ${FONT_D}`; g.fillStyle = ink; T('fillText', NAMES[num % NAMES.length], 192, 30); // name across the shoulders
+    g.font = `900 52px ${FONT_D}`; g.lineWidth = 7; g.strokeStyle = '#fff'; T('strokeText', String(num), 192, 70); g.fillStyle = ink; T('fillText', String(num), 192, 70);
+    g.font = `900 22px ${FONT_D}`; g.fillStyle = ink; T('fillText', t ? 'DUEL' : 'ROAD', 64, 52);
+    g.font = `900 20px ${FONT_D}`; T('fillText', String(num), 78, 80);
     g.restore();
     g.fillStyle = '#22252e'; g.fillRect(0, 117, 256, 11); g.fillStyle = '#9a9ea8'; for (const x of [64, 192]) g.fillRect(x - 5, 118, 10, 9); // belt and buckles
     return (jerseyTex[k] = tex(c));
@@ -1875,6 +1993,7 @@ void main(){
     M[8] = Z[0] * sz; M[9] = Z[1] * sz; M[10] = Z[2] * sz; M[11] = 0;
     M[12] = o[0]; M[13] = o[1]; M[14] = o[2]; M[15] = 1;
     NM[0] = X[0] / sx; NM[1] = X[1] / sx; NM[2] = X[2] / sx; NM[3] = Y[0] / sy; NM[4] = Y[1] / sy; NM[5] = Y[2] / sy; NM[6] = Z[0] / sz; NM[7] = Z[1] / sz; NM[8] = Z[2] / sz;
+    if (mirror) { M[0] = -M[0]; M[4] = -M[4]; M[8] = -M[8]; M[12] = -M[12]; NM[0] = -NM[0]; NM[3] = -NM[3]; NM[6] = -NM[6]; } // a lefty: the righty's body reflected across the middle
     gl.uniformMatrix4fv(UL.uM, false, M); gl.uniformMatrix3fv(UL.uNM, false, NM);
     gl.uniform3fv(UL.uC, col.length === 3 && typeof col[0] === 'number' ? col : rgb(col));
     gl.uniform1f(UL.uA, alpha); gl.uniform1f(UL.uSpec, opt.spec ?? 0.04); gl.uniform1f(UL.uFlat, opt.flat ? 1 : 0);
@@ -2037,7 +2156,10 @@ void main(){
     seg(addv(c, [0, -0.2, 0]), addv(ctr, mul(R, FACE.jig * 0.12)), 0.12, 0.9, '#d9a07c');
     const cr = Math.cos(rot), sr = Math.sin(rot), X = addv(mul(R, cr), mul(U, -sr)), Y = addv(mul(R, sr), mul(U, cr)), Z = cross(X, Y);
     const o = addv(ctr, addv(mul(X, ww * 0.03 + FACE.jig * 0.12), mul(Y, hh * 0.05)));
-    part(G.quad || (G.quad = grid(1, 1, (u, v) => [[u - 0.5, v - 0.5, 0], [0, 0, 1]])), [1, 1, 1], addv(o, mul(F, -0.6)), X, Y, Z, ww, hh, 1, { tex: t, alphaTest: true, flat: true });
+    const was = mirror, at = addv(o, mul(F, -0.6)); // a billboard faces the camera: place it where the (mirrored) neck is, but never flip the picture
+    if (was) mirror = false;
+    part(G.quad || (G.quad = grid(1, 1, (u, v) => [[u - 0.5, v - 0.5, 0], [0, 0, 1]])), [1, 1, 1], was ? [-o[0] - F[0] * 0.6, o[1] - F[1] * 0.6, o[2] - F[2] * 0.6] : at, X, Y, Z, ww, hh, 1, { tex: t, alphaTest: true, flat: true });
+    mirror = was;
   }
 
   const shoulderOut = B => 0.53 * B.sh * B.w + 0.07 * B.arm; // the edge of the torso at the shoulder, plus half an upper arm
@@ -2184,7 +2306,7 @@ void main(){
   }
   function drawBat(b) {
     const [X, Z] = frameOf(b.d);
-    part(G.bat, [1, 1, 1], b.a, X, b.d, Z, 1, 1, 1, { tex: batTex, spec: 0.7 });
+    part(G.bat, [1, 1, 1], b.a, X, b.d, Z, 1.2, 1, 1.2, { tex: batTex, spec: 0.7 }); // a 20% fatter barrel to match the bigger sweet spot
   }
   function drawBallGL() {
     const b = S.ball, p = [b.x, b.y, b.z], dist = Math.max(1, toCam(p)[2]), r = Math.max(BALL_R * 1.15, 2.6 * dist / focal);
@@ -2380,8 +2502,7 @@ void main(){
   const ENV_H = { flat: [], solid: [], glass: [], posts: [] };
   (() => {
     const D = D2R; let sdH = 99; const rh = () => { sdH = (sdH * 1103515245 + 12345) & 0x7fffffff; return sdH / 0x7fffffff; };
-    let b = MB(); ringB(b, 0, 0, 0, 1400, -Math.PI, Math.PI, 72, -0.02, wuv(30)); ENV_H.flat.push({ g: geo(b.p, b.n, b.t, b.i), col: [0.93, 0.98, 0.9], tex: T.grass }); // park lawn out to the trees
-    ENV_H.flat.push(...ENV.flat);
+    let b = MB(); ringB(b, 0, 0, 2, 2400, -Math.PI, Math.PI, 72, -0.02, wuv(30)); ENV_H.flat.push({ g: geo(b.p, b.n, b.t, b.i), col: [0.93, 0.98, 0.9], tex: T.grass }); // park lawn out to the trees
     const P3 = (t, r, y) => [Math.sin(t) * r, y, Math.cos(t) * r];
     // chain-link outfield fence with a yellow safety cap, galvanized posts every 8 degrees
     const fence = MB(), capY = MB();
@@ -2415,37 +2536,80 @@ void main(){
       ENV_H.posts.push([base, top, 0.6, '#7c858f']);
       const lamps = MB(); boxB(lamps, top, 4.5, 2.2, 1.2); put(ENV_H.solid, lamps, '#dfe3e8');
     }
-    // the trees: big maples and elms all round the park (but not in front of the Queensway wall)
-    const trunks = [], crowns = MB(), crowns2 = MB(), crowns3 = MB();
-    const blob = (bb, c, r, h) => { // a low-poly round crown: three lumpy rings between a top and a bottom
-      const N = 9, rings = [[-0.55, 0.62], [0, 1], [0.5, 0.78]].map(([dy, k]) => Array.from({ length: N }, (_, j) => { const q = j / N * Math.PI * 2, w = r * k * (0.82 + rh() * 0.36); return [c[0] + Math.cos(q) * w, c[1] + dy * h + (rh() - 0.5) * 1.5, c[2] + Math.sin(q) * w]; }));
+    // ---- everything around the diamond, from the satellite view (see HAMPTON) ----
+    const H_ = HAMPTON, hw = H_.hw, flatB = MB(), lotB = MB();
+    const hwp = (t, o, y = 0) => [hw.p0[0] + hw.u[0] * t + hw.n[0] * o, y, hw.p0[1] + hw.u[1] * t + hw.n[1] * o];
+    for (const lot of H_.lots) fanB(lotB, [lot.reduce((m, q) => m + q[0], 0) / lot.length, 0.03, lot.reduce((m, q) => m + q[1], 0) / lot.length], [...lot, lot[0]].map(([x, z]) => [x, 0.03, z]), wuv(40));
+    qB(lotB, hwp(hw.t0, -8, 0.04), hwp(hw.t1, -8, 0.04), hwp(hw.t1, hw.w + 8, 0.04), hwp(hw.t0, hw.w + 8, 0.04), [[0, 0], [60, 0], [60, 4], [0, 4]]); // the Queensway's eight lanes
+    put(ENV_H.flat, lotB, '#5d6166');
+    const dashB = MB();
+    for (const o of [15.5, 31, 46.5, 77.5, 93, 108.5]) for (let t = hw.t0; t < hw.t1; t += 40) { const a0 = hwp(t, o - 0.4, 0.06), a1 = hwp(t + 14, o - 0.4, 0.06), a2 = hwp(t + 14, o + 0.4, 0.06), a3 = hwp(t, o + 0.4, 0.06); qB(dashB, a3, a2, a1, a0); } // dashed lane lines
+    put(ENV_H.flat, dashB, '#e9e6dc', { a: 0.85 });
+    // gravel path round Field #1 and up into the woods
+    ringB(flatB, 0, 0, FENCE_R + 14, FENCE_R + 20, -70 * D, 70 * D, 40, 0.03);
+    for (let z = 420; z < 1250; z += 30) { const x0 = -30 + (z - 450) * 0.18, x1 = -30 + (z + 30 - 450) * 0.18; lineB(flatB, x0, z, x1, z + 30, 7, 0.03); }
+    put(ENV_H.flat, flatB, '#c8b896');
+    const P_ = H_.pool, pool = MB(); qB(pool, [P_.x - P_.w / 2, 0.05, P_.z + P_.d / 2], [P_.x + P_.w / 2, 0.05, P_.z + P_.d / 2], [P_.x + P_.w / 2, 0.05, P_.z - P_.d / 2], [P_.x - P_.w / 2, 0.05, P_.z - P_.d / 2]); put(ENV_H.flat, pool, '#5fb7e0');
+    // Field #2: sand infield, home plate, a backstop and benches of its own
+    const [f2x, f2z] = H_.field2, f2 = MB();
+    fanB(f2, [f2x, 0.05, f2z], arc(f2x, f2z, 80, -52 * D, 52 * D, 24, 0.05), wuv(16)); put(ENV_H.flat, f2, [0.95, 0.9, 0.85], { tex: T.dirt });
+    const f2c = MB(); for (const sg of [1, -1]) lineB(f2c, f2x, f2z, f2x + sg * 120, f2z + 120, 0.3, 0.07); put(ENV_H.flat, f2c, '#ece7da', { a: 0.9 });
+    ENV_H.flat.push(...ENV.flat);
+    // rotated boxes: buildings, and the trunks merged into one mesh
+    const obox = (bb, x, z, w, d, h, ang = 0, y0 = 0, roof = null) => {
+      const cs = Math.cos(ang), sn = Math.sin(ang), k = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([i, j]) => [x + (i * w / 2) * cs + (j * d / 2) * sn, z - (i * w / 2) * sn + (j * d / 2) * cs]);
+      for (let i = 0; i < 4; i++) { const a0 = k[i], a1 = k[(i + 1) % 4]; qB(bb, [a0[0], y0, a0[1]], [a1[0], y0, a1[1]], [a1[0], y0 + h, a1[1]], [a0[0], y0 + h, a0[1]]); }
+      if (roof) { // a gable roof along the long side
+        const m0 = [(k[0][0] + k[3][0]) / 2, (k[0][1] + k[3][1]) / 2], m1 = [(k[1][0] + k[2][0]) / 2, (k[1][1] + k[2][1]) / 2], top = y0 + h + roof.rise;
+        qB(roof.b, [k[0][0], y0 + h, k[0][1]], [k[1][0], y0 + h, k[1][1]], [m1[0], top, m1[1]], [m0[0], top, m0[1]]);
+        qB(roof.b, [k[2][0], y0 + h, k[2][1]], [k[3][0], y0 + h, k[3][1]], [m0[0], top, m0[1]], [m1[0], top, m1[1]]);
+        qB(bb, [k[3][0], y0 + h, k[3][1]], [k[0][0], y0 + h, k[0][1]], [m0[0], top, m0[1]], [m0[0], top, m0[1]]);
+        qB(bb, [k[1][0], y0 + h, k[1][1]], [k[2][0], y0 + h, k[2][1]], [m1[0], top, m1[1]], [m1[0], top, m1[1]]);
+      } else qB(bb, [k[0][0], y0 + h, k[0][1]], [k[1][0], y0 + h, k[1][1]], [k[2][0], y0 + h, k[2][1]], [k[3][0], y0 + h, k[3][1]]);
+    };
+    const G_ = H_.grocery, Pl = H_.plaza, PH = H_.poolHouse;
+    let bb = MB(); obox(bb, G_.x, G_.z, G_.w, G_.d, G_.h, G_.ang); put(ENV_H.solid, bb, '#cdbf9f');           // the grocery store: a big flat-roofed box
+    bb = MB(); obox(bb, G_.x, G_.z, G_.w + 1, G_.d + 1, 3.5, G_.ang, G_.h - 3.5); put(ENV_H.solid, bb, '#2f7a4a');  // its coloured fascia
+    bb = MB(); obox(bb, Pl.x, Pl.z, Pl.w, Pl.d, Pl.h, Pl.ang); put(ENV_H.solid, bb, '#a8574a');                 // the Sebring Ave plaza
+    bb = MB(); obox(bb, PH.x, PH.z, PH.w, PH.d, PH.h, 0); put(ENV_H.solid, bb, '#d9d2c2');                       // the pool's changing rooms
+    const pf = MB(); for (const [x0, z0, x1, z1] of [[-1, -1, 1, -1], [1, -1, 1, 1], [1, 1, -1, 1], [-1, 1, -1, -1]]) { const A = [P_.x + x0 * (P_.w / 2 + 8), P_.z + z0 * (P_.d / 2 + 8)], B = [P_.x + x1 * (P_.w / 2 + 8), P_.z + z1 * (P_.d / 2 + 8)]; qB(pf, [A[0], 0, A[1]], [B[0], 0, B[1]], [B[0], 6, B[1]], [A[0], 6, A[1]], [[0, 0], [8, 0], [8, 1.2], [0, 1.2]]); }
+    ENV_H.glass.push({ g: geo(pf.p, pf.n, pf.t, pf.i), col: [1, 1, 1], tex: T.net, a: 0.45 });
+    // the houses on Parkview Rd and Westview Ave, backing onto the park
+    const wallsB = {}, roofsB = {};
+    for (const h of H_.houses) { const wb = wallsB[h.wall] || (wallsB[h.wall] = MB()), rb = roofsB[h.roof] || (roofsB[h.roof] = MB()); obox(wb, h.x, h.z, h.w, h.d, h.h, 0, 0, { b: rb, rise: 9 }); }
+    for (const c in wallsB) put(ENV_H.solid, wallsB[c], c); for (const c in roofsB) put(ENV_H.solid, roofsB[c], c);
+    // the dog run's fence, along the highway toward Island Park Dr
+    const dg = MB(), dl = H_.dog; for (let i = 0; i < 4; i++) { const A = dl[i], B = dl[(i + 1) % 4]; qB(dg, [A[0], 0, A[1]], [B[0], 0, B[1]], [B[0], 5, B[1]], [A[0], 5, A[1]], [[0, 0], [20, 0], [20, 1], [0, 1]]); }
+    ENV_H.glass.push({ g: geo(dg.p, dg.n, dg.t, dg.i), col: [1, 1, 1], tex: T.net, a: 0.4 });
+    // the trees: low-poly round crowns, trunks merged into one mesh
+    const trunkB = MB(), crowns = [MB(), MB(), MB(), MB()], ccols = ['#2f6b2a', '#3d7d30', '#4f8d38', '#2a5f2c'];
+    const blob = (bb2, c, r, h) => { // three lumpy rings between a top and a bottom
+      const N = 8, rings = [[-0.55, 0.62], [0, 1], [0.5, 0.78]].map(([dy, k]) => Array.from({ length: N }, (_, j) => { const q = j / N * Math.PI * 2, w = r * k * (0.82 + rh() * 0.36); return [c[0] + Math.cos(q) * w, c[1] + dy * h + (rh() - 0.5) * 1.5, c[2] + Math.sin(q) * w]; }));
       const top = [c[0], c[1] + h * 0.85, c[2]], bot = [c[0], c[1] - h * 0.8, c[2]];
       for (let j = 0; j < N; j++) { const j2 = (j + 1) % N;
-        qB(bb, rings[0][j2], rings[0][j], bot, bot); qB(bb, rings[0][j], rings[0][j2], rings[1][j2], rings[1][j]);
-        qB(bb, rings[1][j], rings[1][j2], rings[2][j2], rings[2][j]); qB(bb, rings[2][j], rings[2][j2], top, top); }
+        qB(bb2, rings[0][j2], rings[0][j], bot, bot); qB(bb2, rings[0][j], rings[0][j2], rings[1][j2], rings[1][j]);
+        qB(bb2, rings[1][j], rings[1][j2], rings[2][j2], rings[2][j]); qB(bb2, rings[2][j], rings[2][j2], top, top); }
     };
-    for (let i = 0; i < 70; i++) {
-      const ang = (-150 + rh() * 300) * D, r = 290 + rh() * 170;
-      if (ang < -25 * D && ang > -70 * D && r > 330) continue; // the highway corridor
-      const hgt = 26 + rh() * 26, cr = 11 + rh() * 9, c = P3(ang, r, hgt);
-      trunks.push([P3(ang, r, 0), P3(ang, r, hgt - cr * 0.4), 0.9 + rh() * 0.6, '#5b4636']);
-      blob([crowns, crowns2, crowns3][i % 3], c, cr, cr * 0.95);
-    }
-    ENV_H.posts.push(...trunks);
-    put(ENV_H.solid, crowns, '#2f6b2a'); put(ENV_H.solid, crowns2, '#3d7d30'); put(ENV_H.solid, crowns3, '#4f8d38');
-    // the Queensway (Highway 417): a long concrete sound wall past left field, and a big green sign
-    const wall = MB(); for (let i = 0; i < 10; i++) { const t0 = (-72 + i * 5) * D, t1 = (-67 + i * 5) * D; qB(wall, P3(t0, 520, 0), P3(t1, 520, 0), P3(t1, 520, 16), P3(t0, 520, 16)); }
-    put(ENV_H.solid, wall, '#aeb2b3');
+    for (const t of H_.trees) { obox(trunkB, t.x, t.z, 2, 2, t.h - t.cr * 0.5, rh() * 1.5); blob(crowns[ccols.indexOf(t.c)], [t.x, t.h, t.z], t.cr, t.cr * 0.95); }
+    put(ENV_H.solid, trunkB, '#5b4636'); crowns.forEach((c, i) => put(ENV_H.solid, c, ccols[i]));
+    // the Queensway: concrete barriers on each side and down the middle, tall lamp posts on the median
+    const bar = MB(); for (const o of [-3, 61, 63, hw.w + 3]) { const a0 = hwp(hw.t0, o), a1 = hwp(hw.t1, o); qB(bar, a0, a1, [a1[0], 3.4, a1[2]], [a0[0], 3.4, a0[2]]); }
+    put(ENV_H.solid, bar, '#c4c6c4');
+    for (let t = hw.t0 + 60; t < hw.t1; t += 170) ENV_H.posts.push([hwp(t, 62, 3), hwp(t, 62, 42), 0.45, '#8d969e']);
+    // the big green sign on a gantry over the westbound lanes, facing the park
     const signT = canvasTex(512, 160, (g, w, h) => { g.fillStyle = '#0f6b3d'; g.fillRect(0, 0, w, h); g.strokeStyle = '#f3f3ef'; g.lineWidth = 8; g.strokeRect(10, 10, w - 20, h - 20);
       g.fillStyle = '#f3f3ef'; g.font = '800 64px "Chivo", Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('417 Queensway', w / 2, h / 2 - 12);
-      g.font = '600 30px "Chivo", Arial, sans-serif'; g.fillText('Island Park Dr', w / 2, h / 2 + 42); });
-    const sign = MB(), sa = -46 * D, sc0 = P3(sa - 4 * D, 505, 30), sc1 = P3(sa + 4 * D, 505, 30); qB(sign, sc0, sc1, [sc1[0], 48, sc1[2]], [sc0[0], 48, sc0[2]], [[0, 0], [1, 0], [1, 1], [0, 1]]);
+      g.font = '600 30px "Chivo", Arial, sans-serif'; g.fillText('Exit 124 · Island Park Dr', w / 2, h / 2 + 42); });
+    const st = 40, sg0 = hwp(st, 4, 22), sg1 = hwp(st, 58, 22), sign = MB();
+    qB(sign, sg0, sg1, [sg1[0], 40, sg1[2]], [sg0[0], 40, sg0[2]], [[0, 0], [1, 0], [1, 1], [0, 1]]);
     ENV_H.solid.push({ g: geo(sign.p, sign.n, sign.t, sign.i), col: [1, 1, 1], tex: signT, flat: true });
-    for (const s0 of [sc0, sc1]) ENV_H.posts.push([[s0[0], 0, s0[2]], [s0[0], 31, s0[2]], 0.5, '#8d969e']);
-    // the second diamond's backstop, off past right field
-    const bs2 = MB(), c2 = P3(120 * D, 380, 0);
-    for (let i = 0; i < 6; i++) { const t0 = (i * 15 + 300) * D, t1 = ((i + 1) * 15 + 300) * D; qB(bs2, [c2[0] + Math.sin(t0) * 28, 0, c2[2] + Math.cos(t0) * 28], [c2[0] + Math.sin(t1) * 28, 0, c2[2] + Math.cos(t1) * 28], [c2[0] + Math.sin(t1) * 28, 16, c2[2] + Math.cos(t1) * 28], [c2[0] + Math.sin(t0) * 28, 16, c2[2] + Math.cos(t0) * 28], [[0, 0], [3, 0], [3, 3], [0, 3]]); }
+    for (const o of [-4, hw.w + 4]) ENV_H.posts.push([hwp(st, o, 0), hwp(st, o, 42), 0.7, '#8d969e']);
+    ENV_H.posts.push([hwp(st, -4, 41), hwp(st, hw.w + 4, 41), 0.6, '#8d969e']);
+    // Field #2's backstop and its two light towers
+    const bs2 = MB();
+    for (let i = 0; i < 6; i++) { const t0 = (140 + i * 13) * D, t1 = (153 + i * 13) * D, Q = (t, y) => [f2x + Math.sin(t) * 28, y, f2z + Math.cos(t) * 28]; qB(bs2, Q(t0, 0), Q(t1, 0), Q(t1, 16), Q(t0, 16), [[0, 0], [3, 0], [3, 3], [0, 3]]); ENV_H.posts.push([Q(t0, 0), Q(t0, 16.5), 0.2, '#8d969e']); }
     ENV_H.glass.push({ g: geo(bs2.p, bs2.n, bs2.t, bs2.i), col: [1, 1, 1], tex: T.net, a: 0.5 });
+    for (const [dx, dz] of [[-70, 110], [70, 110]]) { ENV_H.posts.push([[f2x + dx, 0, f2z + dz], [f2x + dx, 70, f2z + dz], 0.6, '#7c858f']); const lm = MB(); boxB(lm, [f2x + dx, 70, f2z + dz], 4.5, 2.2, 1.2); put(ENV_H.solid, lm, '#dfe3e8'); }
   })();
   const envNow = () => (PARK === 'hampton' ? ENV_H : ENV);
   // live scoreboard face
@@ -2482,7 +2646,22 @@ void main(){
     const E = envNow();
     drawList(E.solid);
     for (const [a, b2, r = 0.6, col = '#9aa3ad'] of E.posts) seg(a, b2, r, 1, col);
-    if (E === ENV) scoreboard();
+    if (E === ENV) scoreboard(); else queenswayTraffic();
+  }
+  /* cars and trucks on the Queensway, four lanes each way (just for looks: they never come near the field) */
+  const CAR_COLS = ['#d8dadc', '#1f2328', '#9b1c1c', '#2c4f86', '#7a7f86', '#f0f0ee', '#b8892f', '#3c6e47'];
+  const CARS = Array.from({ length: 30 }, (_, i) => ({ lane: i % 8, ph: (i * 397) % 2000, v: 92 + ((i * 37) % 30), col: CAR_COLS[(i * 5) % 8], truck: i % 7 === 3 }));
+  function queenswayTraffic() {
+    const hw = HAMPTON.hw, L = hw.t1 - hw.t0, now = performance.now() / 1000;
+    const X = [hw.u[0], 0, hw.u[1]], Z = [hw.n[0], 0, hw.n[1]];
+    for (const c of CARS) {
+      const east = c.lane < 4, o = east ? 77.5 + 15.5 * (c.lane % 4) - 7.5 : 7.5 + 15.5 * (c.lane % 4); // northeast-bound lanes are the far ones
+      let t = (c.ph + c.v * now) % L; if (!east) t = L - t; t += hw.t0;
+      const len = c.truck ? 14 : 7.5, hgt = c.truck ? 5.5 : 2.6, wid = c.truck ? 4.2 : 3.4;
+      const at = [hw.p0[0] + hw.u[0] * t + hw.n[0] * o, hgt, hw.p0[1] + hw.u[1] * t + hw.n[1] * o];
+      part(G.cube, c.truck ? '#e7e7e2' : c.col, at, X, UP, Z, len, hgt, wid, { spec: 0.4 });
+      if (!c.truck) part(G.cube, '#2a3138', [at[0], hgt * 1.75, at[2]], X, UP, Z, len * 0.55, hgt * 0.45, wid * 0.9, { spec: 0.6 }); // the cabin and windows
+    }
   }
   function envGlass() { gl.depthMask(false); drawList(envNow().glass); gl.depthMask(true); setAlpha(1); }
 
@@ -2504,7 +2683,7 @@ void main(){
       part(quad, [1, 1, 1], ctr, X, Y, Z, tg.r * 2, tg.r * 2, 1, { tex: tg.hit ? TT.hit : TT.live, alphaTest: true, spec: 0.15 });
     }
   }
-  return { drawTargets, envFlat, envSolid, envGlass, blob, clear: clearGL, canvas: cvs, begin, setAlpha, player, drawBat, drawBallGL, standingPose, batterPose, pitcherPose, catcherPose };
+  return { drawTargets, envFlat, envSolid, envGlass, blob, clear: clearGL, canvas: cvs, begin, setAlpha, player, drawBat, drawBallGL, setMirror, standingPose, batterPose, pitcherPose, catcherPose };
 })();
 if (GL3) { GL3.canvas.className = 'layer'; cv.after(GL3.canvas); }
 let useGL = true; try { useGL = localStorage.getItem('fpd-gfx') !== 'classic'; } catch (_) {}
@@ -2566,11 +2745,12 @@ function drawPlayersGL(fieldT, batT, pitcherOff) {
   let catcher = null;
   if (catcherMoving) { const p = GL3.standingPose([cf.x, 0, cf.z], cf.face || 0, { run: cf.run, hold: S.ball.held === 0 }, Bc); p.headKind = 'mask'; list.push([p, Bc, fieldT, NUMS.catcher[fieldT], '', [cf.x, 0, cf.z]]); }
   else catcher = [GL3.catcherPose(), Bc, fieldT, NUMS.catcher[fieldT], 'catcher', [0, 0, -4.4]];
-  if (!pitcherOff) { const B = bodyFor('pit' + fieldT, 'normal', fieldT); list.push([GL3.pitcherPose(B), B, fieldT, NUMS.pitcher[fieldT], '', [0, 0, 50.2 - FLICK.stride * (S.oppStride || 0) * 0.6]]); }
+  if (!pitcherOff) { const B = bodyFor('pit' + fieldT, 'normal', fieldT); list.push([GL3.pitcherPose(B), B, fieldT, NUMS.pitcher[fieldT], '', [0, 0, 50.2 - FLICK.stride * (S.oppStride || 0) * 0.6], pitMirror()]); }
   const slot = ((S.order && S.order[batT]) || 0) % 9, Bb = bodyFor('bat' + batT + '-' + slot, S.bb || 'normal', batT), bp = GL3.batterPose(Bb);
   bp.bobble = FACE.on && humanBats();
   const batterGone = rn && rn.batterGone;
-  if (!batterGone) list.push([bp, Bb, batT, LINEUP[batT][slot], 'batter', [S.bat.bx, 0, S.bat.bz]]);
+  const bm = batMirror();
+  if (!batterGone) list.push([bp, Bb, batT, LINEUP[batT][slot], 'batter', [bm ? -S.bat.bx : S.bat.bx, 0, S.bat.bz], bm]);
   else if (bp.bobble) { const me = list.find(it => it[1] === Bb && it[0].headKind === 'helmet'); if (me) me[0].bobble = true; } // your face goes down the line with you
   // the players themselves, lit and depth-tested
   GL3.begin();
@@ -2580,8 +2760,8 @@ function drawPlayersGL(fieldT, batT, pitcherOff) {
   if (ballOn && !S.inHand && hyp(S.ball.x, S.ball.z) < FENCE_R) { const pitch = S.phase === 'flight' || S.phase === 'replay'; GL3.blob([S.ball.x, 0, S.ball.z], pitch ? 1.6 / (1 + S.ball.y * 0.04) : 0.8 / (1 + S.ball.y * 0.08), pitch ? 0.32 : 0.22); }
   GL3.envSolid(); // the park, depth-tested
   if (isTargets()) GL3.drawTargets(S.prac.targets);
-  for (const [p, B, t, num, kind] of list) GL3.player(p, B, t, num, kind);
-  GL3.drawBat(batterGone ? { a: [S.bat.bx + 0.9, 0.11, S.bat.bz - 0.6], d: norm([0.85, 0, 0.5]) } : bp.bat); // dropped in the dirt once he takes off
+  for (const [p, B, t, num, kind, , mir] of list) { GL3.setMirror(mir); GL3.player(p, B, t, num, kind); }
+  GL3.setMirror(bm); GL3.drawBat(batterGone ? { a: [S.bat.bx + 0.9, 0.11, S.bat.bz - 0.6], d: norm([0.85, 0, 0.5]) } : bp.bat); GL3.setMirror(false); // dropped in the dirt once he takes off
   if (ballOn) GL3.drawBallGL();
   GL3.envGlass();
   if (catcher && cam.key !== 'bat') GL3.player(...catcher.slice(0, 5));
@@ -2646,9 +2826,9 @@ function drawPitchGuide() {
   ctx.fillStyle = 'rgba(10,15,31,.8)'; ctx.fillRect(x0, y0, bw, bh);
   ctx.strokeStyle = 'rgba(243,234,210,.25)'; ctx.lineWidth = 1; ctx.strokeRect(x0 + 0.5, y0 + 0.5, bw - 1, bh - 1);
   const sc = bw / 7, cx = x0 + bw / 2, cz = y0 + bh * 0.56; // 7 ft across; the pitcher's side is at the top
-  const X = x => cx + x * sc, Z = z => cz - z * sc;
+  const X = x => cx - x * sc, Z = z => cz - z * sc; // seen from behind the mound, like the main view: +x (first base) on the left
   ctx.fillStyle = 'rgba(168,98,58,.55)'; ctx.fillRect(x0 + 1, y0 + 22, bw - 2, bh - 40);
-  ctx.fillStyle = '#cfa56c'; ctx.fillRect(X(-MAT.half), Z(MAT.z1), MAT.half * 2 * sc, (MAT.z1 - MAT.z0) * sc);
+  ctx.fillStyle = '#cfa56c'; ctx.fillRect(X(MAT.half), Z(MAT.z1), MAT.half * 2 * sc, (MAT.z1 - MAT.z0) * sc);
   ctx.fillStyle = '#f3ead2'; ctx.beginPath(); ctx.moveTo(X(-0.71), Z(1.42)); ctx.lineTo(X(0.71), Z(1.42)); ctx.lineTo(X(0.71), Z(0.71)); ctx.lineTo(X(0), Z(0)); ctx.lineTo(X(-0.71), Z(0.71)); ctx.closePath(); ctx.fill();
   ctx.font = `700 11px ${FONT_D}`; ctx.fillStyle = 'rgba(243,234,210,.7)'; ctx.textAlign = 'left';
   ctx.fillText('LET GO NOW', x0 + 8, y0 + 15);
@@ -2670,7 +2850,7 @@ function drawPitchGuide() {
   // the wind, seen from above the same way as the box (the pitcher's side at the top)
   const wm = Math.hypot(WIND.x, WIND.z), mph = Math.round(wm * 2.2);
   if (mph >= 2) {
-    const ax = x0 + bw - 22, ay = y0 + bh - 32, ux = WIND.x / wm, uz = -WIND.z / wm, len = 9 + Math.min(9, wm * 2);
+    const ax = x0 + bw - 22, ay = y0 + bh - 32, ux = -WIND.x / wm, uz = -WIND.z / wm, len = 9 + Math.min(9, wm * 2);
     ctx.save(); ctx.translate(ax, ay); ctx.rotate(Math.atan2(uz, ux));
     ctx.strokeStyle = ctx.fillStyle = '#8fd3ff'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(-len, 0); ctx.lineTo(len - 5, 0); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(len, 0); ctx.lineTo(len - 7, -5); ctx.lineTo(len - 7, 5); ctx.closePath(); ctx.fill(); ctx.restore();
@@ -2716,7 +2896,7 @@ function draw() {
   const cf = S.fielders[0];
   const catcherMoving = S.batted && (Math.abs(cf.x - cf.home[0]) > 0.5 || Math.abs(cf.z - cf.home[1]) > 0.5);
   objs.push({ d: depth([0, 3, -4.2]), fn: () => catcherMoving ? fig(() => standing([cf.x, 0, cf.z], cf.face || 0, teamCol(fieldT), teamDark(fieldT), { run: cf.run, hold: S.ball.held === 0, num: NUMS.catcher[fieldT], body: bodyFor('cat' + fieldT, 'heavy', fieldT) }), [cf.x, 0, cf.z]) : fig(() => drawCatcher(1), [0, 0, -4.4], cam.key === 'bat' ? 0.3 : 1) });
-  if (!pitcherOff) objs.push({ d: depth([0, 3, 50.3]), fn: () => fig(drawPitcher, [0, 0, 50.2 - FLICK.stride * (S.oppStride || 0) * 0.6]) });
+  if (!pitcherOff) objs.push({ d: depth([0, 3, 50.3]), fn: () => { MIRX = pitMirror(); try { fig(drawPitcher, [0, 0, 50.2 - FLICK.stride * (S.oppStride || 0) * 0.6]); } finally { MIRX = false; } } });
   if (isTargets()) for (const tg of S.prac.targets) objs.push({ d: depth([tg.x, tg.h, tg.z]) + 1, fn: () => {
     const X = [Math.cos(tg.ang), 0, -Math.sin(tg.ang)], cy = tg.hit ? 0.3 : tg.h;
     if (!tg.hit) line3([tg.x, 0, tg.z], [tg.x, tg.h - tg.r, tg.z], 0.22, '#3a3f47');
@@ -2724,7 +2904,7 @@ function draw() {
       for (let k = 0; k < 24; k++) { const q = k / 24 * Math.PI * 2; pts.push(tg.hit ? [tg.x + X[0] * Math.cos(q) * r + Math.sin(tg.ang) * Math.sin(q) * r, cy, tg.z + X[2] * Math.cos(q) * r + Math.cos(tg.ang) * Math.sin(q) * r] : [tg.x + X[0] * Math.cos(q) * r, cy + Math.sin(q) * r, tg.z + X[2] * Math.cos(q) * r]); }
       poly(pts, tg.hit ? (i % 2 ? '#d6d9de' : '#8d939c') : (i % 2 ? '#f7f4ee' : '#d32f2f')); }
   } });
-  if (!(rn2 && rn2.batterGone)) objs.push({ d: depth([S.bat.bx, 3, S.bat.bz]), fn: () => fig(drawBatter, [S.bat.bx, 0, S.bat.bz]) });
+  if (!(rn2 && rn2.batterGone)) objs.push({ d: depth([S.bat.bx, 3, S.bat.bz]), fn: () => { MIRX = batMirror(); try { fig(drawBatter, [S.bat.bx, 0, S.bat.bz]); } finally { MIRX = false; } } });
   if (S.phase !== 'over' && S.phase !== 'idle' && S.phase !== 'lobbyWait' && !S.hideBall && !ballGone()) objs.push({ d: depth([S.ball.x, S.ball.y, S.ball.z]) - 0.05, fn: drawBall });
   objs.sort((a, b) => b.d - a.d).forEach(o => o.fn());
   }
@@ -2851,8 +3031,10 @@ const pickSeg = (seg, attr, get, set) => document.querySelectorAll(`#${seg} butt
   b.setAttribute('aria-pressed', b.dataset[attr] === get());
   b.addEventListener('click', () => { set(b.dataset[attr]); document.querySelectorAll(`#${seg} button`).forEach(x => x.setAttribute('aria-pressed', x === b)); });
 });
+pickSeg('batsSeg', 'bats', () => menuBats, v => { menuBats = v; try { localStorage.setItem('fpd-bats', v); } catch (_) {} });
+pickSeg('throwsSeg', 'throws', () => menuThrows, v => { menuThrows = v; try { localStorage.setItem('fpd-throws', v); } catch (_) {} });
 pickSeg('parkSeg', 'park', () => menuPark, v => { menuPark = v; try { localStorage.setItem('fpd-park', v); } catch (_) {} });
-pickSeg('wxSeg', 'wx', () => menuWx, v => { menuWx = v; try { localStorage.setItem('fpd-wx', v); } catch (_) {} });
+pickSeg('wxSeg', 'wx', () => menuWx, v => { menuWx = v; try { localStorage.setItem('fpd-wx2', v); } catch (_) {} });
 document.querySelectorAll('#innSeg button').forEach(b => b.addEventListener('click', () => {
   menuInn = +b.dataset.inn;
   document.querySelectorAll('#innSeg button').forEach(x => x.setAttribute('aria-pressed', x === b));
