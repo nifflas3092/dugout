@@ -1312,7 +1312,6 @@ async function loadDemo() {
 }
 
 /* ---------- boot ---------- */
-document.getElementById('bigText').onclick = () => platform.openMenu ? platform.openMenu('mPrefs') : null;
 window.addEventListener('hashchange', render);
 render();
 
