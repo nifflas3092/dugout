@@ -1809,7 +1809,7 @@ void main(){
   const cyl = k => cylCache[k] || (cylCache[k] = lathe([[0, 1], [1, k]], 12));
   const cylLoCache = {}, cylLo = k => cylLoCache[k] || (cylLoCache[k] = lathe([[0, 1], [1, k]], 16));
   const G = { sph: sphere(), half: sphere(0, Math.PI / 2, 18, 6), helm: sphere(0, Math.PI * 0.6, 18, 8),
-    lsph: sphere(0, Math.PI, 20, 14), lhalf: sphere(0, Math.PI / 2, 20, 7), lhelm: sphere(0, Math.PI * 0.6, 20, 9) };
+    lsph: sphere(0, Math.PI, 14, 10), lhalf: sphere(0, Math.PI / 2, 14, 5), lhelm: sphere(0, Math.PI * 0.6, 14, 6) }; // players: lighter meshes, there are a lot of them
   // a unit cube for blocky fists
   G.cube = (() => { const P = [], N = [], T = [], I = []; const f = (n, u, v) => { const k = P.length / 3; for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { P.push(n[0] + u[0] * a + v[0] * b, n[1] + u[1] * a + v[1] * b, n[2] + u[2] * a + v[2] * b); N.push(...n); T.push(0, 0); } I.push(k, k + 1, k + 2, k, k + 2, k + 3); };
     f([1, 0, 0], [0, 1, 0], [0, 0, 1]); f([-1, 0, 0], [0, 1, 0], [0, 0, 1]); f([0, 1, 0], [1, 0, 0], [0, 0, 1]); f([0, -1, 0], [1, 0, 0], [0, 0, 1]); f([0, 0, 1], [1, 0, 0], [0, 1, 0]); f([0, 0, -1], [1, 0, 0], [0, 1, 0]); return geo(P, N, T, I); })();
@@ -2736,11 +2736,26 @@ let last = performance.now();
 function frame(now) {
   const dt = Math.min(1 / 30, Math.max(1 / 240, (now - last) / 1000)); last = now;
   if (W > 0) { basis(); update(dt); updateCam(dt); draw(); }
+  perfSample(now);
   requestAnimationFrame(frame);
+}
+/* automatic quality: if frames are slow, draw fewer pixels (and come back up when there's room) */
+const PERF = { scale: 1, ts: [], changed: 0 };
+try { PERF.scale = clamp(+localStorage.getItem('fpd-scale') || 1, 0.5, 1); } catch (_) {}
+function perfSample(now) {
+  const T = PERF.ts; T.push(now);
+  if (T.length < 120) return;
+  const d = []; for (let i = 1; i < T.length; i++) d.push(T[i] - T[i - 1]); d.sort((a, b) => a - b);
+  const med = d[d.length >> 1]; PERF.ts = [now];
+  if (document.hidden || med > 250) return; // a background tab or a hitch, not a slow machine
+  let next = PERF.scale;
+  if (med > 21 && PERF.scale > 0.5) next = Math.max(0.5, PERF.scale - 0.15);                          // under ~48 fps: step down
+  else if (med < 12 && PERF.scale < 1 && now - PERF.changed > 15000) next = Math.min(1, PERF.scale + 0.15); // lots of headroom: step back up
+  if (next !== PERF.scale) { PERF.scale = next; PERF.changed = now; try { localStorage.setItem('fpd-scale', next); } catch (_) {} resize(); }
 }
 function resize() {
   const r = stage.getBoundingClientRect();
-  DPR = Math.min(1.5, window.devicePixelRatio || 1); // sharp enough on retina screens, far fewer pixels to fill
+  DPR = Math.min(1.5, window.devicePixelRatio || 1) * (typeof PERF === 'undefined' ? 1 : PERF.scale); // sharp enough on retina screens, far fewer pixels to fill; lower on slow machines
   W = r.width; H = r.height;
   cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
   BG.cv.width = cv.width; BG.cv.height = cv.height; BG.sig = '';
