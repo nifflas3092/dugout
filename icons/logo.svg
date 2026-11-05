@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="Dugout">
+<path d="M47.5,62 L54.5,62 L54.5,84 Q59,92 59,102 L59,168 L43,168 L43,102 Q43,92 47.5,84 Z" fill="#C4CBD6"/>
+<rect x="47.5" y="20" width="7" height="44" rx="1.5" fill="#1A1D23"/>
+<rect x="44" y="13" width="14" height="7" rx="3.5" fill="#C4CBD6"/>
+<path d="M145.5,66 L152.5,66 L152.5,88 Q157,96 157,106 L157,168 L141,168 L141,106 Q141,96 145.5,88 Z" fill="#6FB7E8"/>
+<rect x="145.5" y="26" width="7" height="42" rx="1.5" fill="#1A1D23"/>
+<rect x="142" y="19" width="14" height="7" rx="3.5" fill="#6FB7E8"/>
+<path d="M60,76 Q60,40 100,38 Q140,40 140,76 L145,172 Q146,186 131,186 L69,186 Q54,186 55,172 Z" fill="#1A1D23"/>
+<path d="M62,106 L44,106 Q38,106 38,114 L39,166 Q40,176 50,176 L62,176 Z" fill="#2C313A"/>
+<path d="M138,106 L156,106 Q162,106 162,114 L161,166 Q160,176 150,176 L138,176 Z" fill="#2C313A"/>
+<path d="M40 113 L60 113 M140 113 L160 113" stroke="#0E1014" stroke-width="2.5" stroke-linecap="round"/>
+<path d="M68,100 L68,78 Q68,48 100,47 Q132,48 132,78 L132,100 Z" fill="#2C313A"/>
+<path d="M74 92 L74 78 Q74 56 100 55 Q126 56 126 78 L126 92" fill="none" stroke="#0E1014" stroke-width="3" stroke-linecap="round"/>
+<rect x="122" y="80" width="8" height="5" rx="1.5" fill="#C4CBD6"/>
+<rect x="123.5" y="84" width="5" height="10" rx="2.5" fill="#C4CBD6"/>
+<path d="M88,66 L112,66 L112,79 Q112,91 100,97 Q88,91 88,79 Z" fill="#1A1D23" stroke="#C4CBD6" stroke-width="1.8" stroke-linejoin="round"/>
+<path d="M93.5 88 L106.5 72 M106.5 88 L93.5 72" stroke="#C4CBD6" stroke-width="2.2" stroke-linecap="round"/>
+<circle cx="100" cy="80" r="4.5" fill="#F2DA3A"/>
+<path d="M64 112 L136 112" stroke="#3A404B" stroke-width="2.5" stroke-linecap="round"/>
+<circle cx="100" cy="133" r="13" fill="#F2DA3A"/>
+<path d="M91 122 Q99 133 91 144 M109 122 Q101 133 109 144" fill="none" stroke="#D6312A" stroke-width="1.8" stroke-linecap="round"/>
+<path d="M91 126 L95 125 M93 130 L97 130 M93.5 134 L97.5 134.5 M92.5 138 L96.5 139 M109 126 L105 125 M107 130 L103 130 M106.5 134 L102.5 134.5 M107.5 138 L103.5 139" stroke="#D6312A" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="68" y="137" width="64" height="40" rx="10" fill="#2C313A"/>
+<path d="M76 137 L124 137" stroke="#0E1014" stroke-width="3" stroke-linecap="round"/>
+</svg>
