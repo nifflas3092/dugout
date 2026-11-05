@@ -1872,7 +1872,21 @@ precision mediump float;
 #endif
 uniform float uRim;
 uniform float uFacet; uniform vec3 uC; uniform float uA; uniform vec3 uFogC; uniform sampler2D uTex; uniform float uTexOn; uniform vec3 uSun; uniform vec3 uEye; uniform float uSpec; uniform float uFlat;
+uniform mat4 uLs; uniform mat4 uLd; uniform sampler2D uSmS; uniform sampler2D uSmD; uniform float uShOn; uniform float uSunK; uniform float uTexel;
 varying vec3 vN; varying vec2 vT; varying vec3 vW;
+float unpackD(vec4 c){ return dot(c, vec4(1.0, 1.0 / 255.0, 1.0 / 65025.0, 1.0 / 16581375.0)); }
+float shadowIn(sampler2D sm, mat4 L, vec3 w, float bias){ // 1 = lit, 0 = in shadow; five taps for a soft edge
+  vec4 p = L * vec4(w, 1.0); vec3 q = p.xyz / p.w * 0.5 + 0.5;
+  if (q.x < 0.002 || q.x > 0.998 || q.y < 0.002 || q.y > 0.998 || q.z > 1.0) return 1.0;
+  float z = q.z - bias, s = 0.0, o = uTexel * 1.2;
+  s += z > unpackD(texture2D(sm, q.xy)) ? 0.0 : 2.0;
+  s += z > unpackD(texture2D(sm, q.xy + vec2(o, o))) ? 0.0 : 1.0;
+  s += z > unpackD(texture2D(sm, q.xy + vec2(-o, o))) ? 0.0 : 1.0;
+  s += z > unpackD(texture2D(sm, q.xy + vec2(o, -o))) ? 0.0 : 1.0;
+  s += z > unpackD(texture2D(sm, q.xy + vec2(-o, -o))) ? 0.0 : 1.0;
+  return s / 6.0;
+}
+vec3 aces(vec3 x){ return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); } // filmic tone curve
 void main(){
   vec4 t = vec4(1.0);
   if (uTexOn > 0.5) { t = texture2D(uTex, vT); if (uTexOn > 1.5 && t.a < 0.45) discard; }
@@ -1882,14 +1896,25 @@ void main(){
   vec3 n = normalize(vN); vec3 v = normalize(uEye - vW);
   ${DER ? 'if (uFacet > 0.5) n = normalize(cross(dFdx(vW), dFdy(vW)));' : ''}
   if (dot(n, v) < 0.0) n = -n;
-  float hemi = 0.5 + 0.5 * n.y;
-  vec3 amb = mix(vec3(0.30, 0.36, 0.26), vec3(0.62, 0.70, 0.82), hemi);
-  float d = max(dot(n, uSun), 0.0); d = mix(d, smoothstep(0.0, 0.5, d), 0.2); // a touch of painted, banded light
-  vec3 col = base * (amb * 0.78 + vec3(1.0, 0.95, 0.84) * d * 0.82);
+  // light in linear space: a warm sun, a blue sky dome above, light bounced off the grass below
+  vec3 lin = pow(base, vec3(2.2));
+  float hemi = 0.5 + 0.5 * n.y, ndl = dot(n, uSun), d = max(ndl, 0.0);
+  float sh = 1.0;
+  if (uShOn > 0.5 && d > 0.0) {
+    float bias = 0.00022 + 0.0009 * (1.0 - d);
+    sh = min(shadowIn(uSmS, uLs, vW, bias * 1.6), shadowIn(uSmD, uLd, vW, bias));
+  }
+  vec3 sky = vec3(0.50, 0.62, 0.86), bounce = vec3(0.30, 0.32, 0.22);
+  vec3 amb = mix(bounce, sky, hemi) * (0.62 + 0.4 * (1.0 - uSunK));
+  vec3 sunC = vec3(1.0, 0.93, 0.80) * 3.1 * uSunK;
+  vec3 col = lin * (amb + sunC * d * sh);
   vec3 h = normalize(v + uSun);
-  col += uSpec * pow(max(dot(n, h), 0.0), 36.0) * vec3(1.0, 0.98, 0.92);
-  col += uRim * pow(1.0 - max(dot(n, v), 0.0), 3.0) * 0.14 * vec3(0.85, 0.92, 1.0);
-  col = mix(col, uFogC, clamp((length(uEye - vW) - 260.0) / 1600.0, 0.0, 0.32));
+  col += uSpec * pow(max(dot(n, h), 0.0), 48.0) * sunC * sh * 0.5;
+  col += uRim * pow(1.0 - max(dot(n, v), 0.0), 3.0) * 0.10 * sky;
+  float dist = length(uEye - vW), haze = 1.0 - exp(-max(dist - 180.0, 0.0) / 2200.0); // aerial perspective: far things fade toward the sky
+  col = mix(col, pow(uFogC, vec3(2.2)) * 1.4, clamp(haze, 0.0, 0.55));
+  col = pow(aces(col * 0.56), vec3(1.0 / 2.2));
+  float luma = dot(col, vec3(0.299, 0.587, 0.114)); col = mix(vec3(luma), col, 1.1); // a little colour back after the filmic curve
   gl_FragColor = vec4(col * al, al);
 }`;
   const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
@@ -1898,7 +1923,61 @@ void main(){
   if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return null;
   gl.useProgram(prog);
   const A = { P: gl.getAttribLocation(prog, 'aP'), N: gl.getAttribLocation(prog, 'aN'), T: gl.getAttribLocation(prog, 'aT') };
-  const UL = {}; ['uM', 'uVP', 'uNM', 'uC', 'uA', 'uFogC', 'uFacet', 'uRim', 'uTex', 'uTexOn', 'uSun', 'uEye', 'uSpec', 'uFlat'].forEach(k => UL[k] = gl.getUniformLocation(prog, k));
+  const UL = {}; ['uM', 'uVP', 'uNM', 'uC', 'uA', 'uFogC', 'uFacet', 'uRim', 'uTex', 'uTexOn', 'uSun', 'uEye', 'uSpec', 'uFlat', 'uLs', 'uLd', 'uSmS', 'uSmD', 'uShOn', 'uSunK', 'uTexel'].forEach(k => UL[k] = gl.getUniformLocation(prog, k));
+  /* ---- sun shadows: depth maps seen from the sun. The park's are drawn once; the players' every frame (used the next frame). ---- */
+  const SVS = `attribute vec3 aP; uniform mat4 uM; uniform mat4 uL; void main(){ gl_Position = uL * uM * vec4(aP, 1.0); }`;
+  const SFS = `#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+void main(){ vec4 e = fract(gl_FragCoord.z * vec4(1.0, 255.0, 65025.0, 16581375.0)); e -= e.yzww * vec4(1.0 / 255.0, 1.0 / 255.0, 1.0 / 255.0, 0.0); gl_FragColor = e; }`;
+  let sprog = null; const SH = { size: 2048, ok: false, static: null, dyn: null, Ls: new Float32Array(16), Ld: new Float32Array(16), staticFor: null, rec: null, dynList: [], staticList: [] };
+  try {
+    sprog = gl.createProgram(); gl.attachShader(sprog, sh(gl.VERTEX_SHADER, SVS)); gl.attachShader(sprog, sh(gl.FRAGMENT_SHADER, SFS)); gl.linkProgram(sprog);
+    if (!gl.getProgramParameter(sprog, gl.LINK_STATUS)) throw new Error('shadow program');
+    const mkMap = () => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, SH.size, SH.size, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      const fb = gl.createFramebuffer(), rb = gl.createRenderbuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+      gl.bindRenderbuffer(gl.RENDERBUFFER, rb); gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, SH.size, SH.size);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb);
+      const okFb = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+      if (okFb) { gl.viewport(0, 0, SH.size, SH.size); gl.clearColor(1, 1, 1, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); } // nothing in shadow yet
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      if (!okFb) throw new Error('shadow framebuffer'); return { t, fb }; };
+    SH.static = mkMap(); SH.dyn = mkMap(); SH.ok = true;
+    SH.uM = gl.getUniformLocation(sprog, 'uM'); SH.uL = gl.getUniformLocation(sprog, 'uL'); SH.aP = gl.getAttribLocation(sprog, 'aP');
+  } catch (_) { SH.ok = false; }
+  function sunMatrix(out, c, half) { // an orthographic view down the sun's rays, centred on c, half-width 'half' ft
+    const f = mul(SUN, -1), r = norm(cross(f, [0, 1, 0])), u = cross(r, f), e = addv(c, mul(SUN, 1200)), n = 400, fr = 2000;
+    const V = [r[0], u[0], -f[0], 0, r[1], u[1], -f[1], 0, r[2], u[2], -f[2], 0, -dotv(r, e), -dotv(u, e), dotv(f, e), 1];
+    const O = [1 / half, 0, 0, 0, 0, 1 / half, 0, 0, 0, 0, -2 / (fr - n), 0, 0, 0, -(fr + n) / (fr - n), 1];
+    for (let col = 0; col < 4; col++) for (let row = 0; row < 4; row++) { let s2 = 0; for (let k = 0; k < 4; k++) s2 += O[k * 4 + row] * V[col * 4 + k]; out[col * 4 + row] = s2; }
+  }
+  sunMatrix(SH.Ls, [0, 0, 180], 470); // the park: everything within about 470 ft of shallow centre field
+  sunMatrix(SH.Ld, [0, 0, 130], 230); // the players: sharper, over the field
+  function renderShadow(map, L, list) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, map.fb); gl.viewport(0, 0, SH.size, SH.size);
+    gl.clearColor(1, 1, 1, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.useProgram(sprog); gl.uniformMatrix4fv(SH.uL, false, L);
+    [A.P, A.N, A.T].forEach(a => gl.disableVertexAttribArray(a)); gl.enableVertexAttribArray(SH.aP);
+    gl.enable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.depthMask(true);
+    let last = null;
+    for (const it of list) {
+      if (last !== it.g) { gl.bindBuffer(gl.ARRAY_BUFFER, it.g.p); gl.vertexAttribPointer(SH.aP, 3, gl.FLOAT, false, 0, 0); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, it.g.i); last = it.g; }
+      gl.uniformMatrix4fv(SH.uM, false, it.m); gl.drawElements(gl.TRIANGLES, it.g.count, gl.UNSIGNED_SHORT, 0);
+    }
+    gl.disableVertexAttribArray(SH.aP);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.useProgram(prog); bound = null;
+  }
+  const shadowsOn = () => SH.ok && (typeof PERF === 'undefined' || PERF.scale > 0.55);
+  function endShadows() { // after the frame: draw this frame's players into the moving-shadow map for the next frame
+    if (!shadowsOn()) { SH.dynList.length = 0; return; }
+    renderShadow(SH.dyn, SH.Ld, SH.dynList); SH.dynList.length = 0;
+  }
   gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
   const ANI = gl.getExtension('EXT_texture_filter_anisotropic') || gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic');
@@ -1994,6 +2073,7 @@ void main(){
     M[12] = o[0]; M[13] = o[1]; M[14] = o[2]; M[15] = 1;
     NM[0] = X[0] / sx; NM[1] = X[1] / sx; NM[2] = X[2] / sx; NM[3] = Y[0] / sy; NM[4] = Y[1] / sy; NM[5] = Y[2] / sy; NM[6] = Z[0] / sz; NM[7] = Z[1] / sz; NM[8] = Z[2] / sz;
     if (mirror) { M[0] = -M[0]; M[4] = -M[4]; M[8] = -M[8]; M[12] = -M[12]; NM[0] = -NM[0]; NM[3] = -NM[3]; NM[6] = -NM[6]; } // a lefty: the righty's body reflected across the middle
+    if (SH.rec && alpha >= 1 && !opt.flat && !opt.noShadow) SH.rec.push({ g, m: M.slice() }); // a shadow caster
     gl.uniformMatrix4fv(UL.uM, false, M); gl.uniformMatrix3fv(UL.uNM, false, NM);
     gl.uniform3fv(UL.uC, col.length === 3 && typeof col[0] === 'number' ? col : rgb(col));
     gl.uniform1f(UL.uA, alpha); gl.uniform1f(UL.uSpec, opt.spec ?? 0.04); gl.uniform1f(UL.uFlat, opt.flat ? 1 : 0);
@@ -2296,6 +2376,15 @@ void main(){
     const V = [R[0], U[0], -F[0], 0, R[1], U[1], -F[1], 0, R[2], U[2], -F[2], 0, -dotv(R, cam.pos), -dotv(U, cam.pos), dotv(F, cam.pos), 1];
     for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) { let s = 0; for (let k = 0; k < 4; k++) s += Pm[k * 4 + r] * V[c * 4 + k]; VP[c * 4 + r] = s; }
     gl.useProgram(prog); gl.uniformMatrix4fv(UL.uVP, false, VP);
+    const shOn = shadowsOn() && SH.staticFor === envNow();
+    gl.uniform1f(UL.uShOn, shOn ? 1 : 0); gl.uniform1f(UL.uTexel, 1 / SH.size);
+    gl.uniform1f(UL.uSunK, WX.kind === 'sunny' || WX.kind === 'silly' ? 1 : WX.kind === 'snow' ? 0.55 : WX.kind === 'rain' ? 0.4 : 0.3);
+    if (SH.ok) {
+      gl.uniformMatrix4fv(UL.uLs, false, SH.Ls); gl.uniformMatrix4fv(UL.uLd, false, SH.Ld);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, SH.static.t); gl.uniform1i(UL.uSmS, 1);
+      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, SH.dyn.t); gl.uniform1i(UL.uSmD, 2);
+      gl.activeTexture(gl.TEXTURE0);
+    }
     gl.uniform1f(UL.uFacet, 0); gl.uniform1f(UL.uRim, 0); gl.uniform3fv(UL.uSun, SUN); gl.uniform3fv(UL.uFogC, [0.78, 0.88, 0.95]); gl.uniform3fv(UL.uEye, cam.pos); gl.uniform1i(UL.uTex, 0);
     [A.P, A.N, A.T].forEach(a => gl.enableVertexAttribArray(a));
     gl.disable(gl.BLEND); gl.depthMask(true); alpha = 1; bound = null;
@@ -2637,17 +2726,27 @@ void main(){
   function envFlat() { gl.disable(gl.DEPTH_TEST); drawList(envNow().flat); setAlpha(1); }
   function blob(at, a = 1, size = 1) { // a soft contact shadow stretched away from the sun
     const L = Math.hypot(SUN[0], SUN[2]), X = [-SUN[0] / L, 0, -SUN[2] / L], Y = [-X[2], 0, X[0]];
-    setAlpha(0.42 * a);
+    setAlpha((shadowsLive() ? 0.16 : 0.42) * a); // with real shadows on, just a little contact darkening
     part(G.quad || (G.quad = grid(1, 1, (u, v) => [[u - 0.5, v - 0.5, 0], [0, 0, 1]])), '#0e2a12', addv([at[0], 0, at[2]], mul(X, 0.9 * size)), X, Y, UP, 3.6 * size, 1.9 * size, 1, { tex: T.blob, flat: true });
     setAlpha(1);
   }
   function envSolid() {
     gl.enable(gl.DEPTH_TEST); setAlpha(1);
-    const E = envNow();
+    const E = envNow(), bake = shadowsOn() && SH.staticFor !== E;
+    if (bake) SH.rec = SH.staticList = [];
     drawList(E.solid);
     for (const [a, b2, r = 0.6, col = '#9aa3ad'] of E.posts) seg(a, b2, r, 1, col);
-    if (E === ENV) scoreboard(); else queenswayTraffic();
+    if (E === ENV) scoreboard();
+    if (bake) { SH.rec = null; renderShadow(SH.static, SH.Ls, SH.staticList); SH.staticList = []; SH.staticFor = E; restoreMain(); }
+    if (E !== ENV) { SH.rec = shadowsOn() ? SH.dynList : null; queenswayTraffic(); SH.rec = null; }
   }
+  function recordDynamic(on) { SH.rec = on && shadowsOn() ? SH.dynList : null; }
+  function restoreMain() { // back to the screen after drawing a shadow map mid-frame
+    const w = Math.round(W * DPR), h = Math.round(H * DPR); gl.viewport(0, 0, w, h);
+    [A.P, A.N, A.T].forEach(a => gl.enableVertexAttribArray(a)); bound = null; setAlpha(1); gl.enable(gl.DEPTH_TEST);
+    gl.uniform1f(UL.uShOn, shadowsOn() ? 1 : 0);
+  }
+  const shadowsLive = () => shadowsOn() && SH.staticFor === envNow();
   /* cars and trucks on the Queensway, four lanes each way (just for looks: they never come near the field) */
   const CAR_COLS = ['#d8dadc', '#1f2328', '#9b1c1c', '#2c4f86', '#7a7f86', '#f0f0ee', '#b8892f', '#3c6e47'];
   const CARS = Array.from({ length: 30 }, (_, i) => ({ lane: i % 8, ph: (i * 397) % 2000, v: 92 + ((i * 37) % 30), col: CAR_COLS[(i * 5) % 8], truck: i % 7 === 3 }));
@@ -2683,7 +2782,7 @@ void main(){
       part(quad, [1, 1, 1], ctr, X, Y, Z, tg.r * 2, tg.r * 2, 1, { tex: tg.hit ? TT.hit : TT.live, alphaTest: true, spec: 0.15 });
     }
   }
-  return { drawTargets, envFlat, envSolid, envGlass, blob, clear: clearGL, canvas: cvs, begin, setAlpha, player, drawBat, drawBallGL, setMirror, standingPose, batterPose, pitcherPose, catcherPose };
+  return { drawTargets, envFlat, envSolid, envGlass, blob, clear: clearGL, canvas: cvs, begin, setAlpha, recordDynamic, endShadows, player, drawBat, drawBallGL, setMirror, standingPose, batterPose, pitcherPose, catcherPose };
 })();
 if (GL3) { GL3.canvas.className = 'layer'; cv.after(GL3.canvas); }
 let useGL = true; try { useGL = localStorage.getItem('fpd-gfx') !== 'classic'; } catch (_) {}
@@ -2760,11 +2859,14 @@ function drawPlayersGL(fieldT, batT, pitcherOff) {
   if (ballOn && !S.inHand && hyp(S.ball.x, S.ball.z) < FENCE_R) { const pitch = S.phase === 'flight' || S.phase === 'replay'; GL3.blob([S.ball.x, 0, S.ball.z], pitch ? 1.6 / (1 + S.ball.y * 0.04) : 0.8 / (1 + S.ball.y * 0.08), pitch ? 0.32 : 0.22); }
   GL3.envSolid(); // the park, depth-tested
   if (isTargets()) GL3.drawTargets(S.prac.targets);
+  GL3.recordDynamic(true); // everything that moves casts a real shadow
   for (const [p, B, t, num, kind, , mir] of list) { GL3.setMirror(mir); GL3.player(p, B, t, num, kind); }
   GL3.setMirror(bm); GL3.drawBat(batterGone ? { a: [S.bat.bx + 0.9, 0.11, S.bat.bz - 0.6], d: norm([0.85, 0, 0.5]) } : bp.bat); GL3.setMirror(false); // dropped in the dirt once he takes off
   if (ballOn) GL3.drawBallGL();
+  GL3.recordDynamic(false);
   GL3.envGlass();
-  if (catcher && cam.key !== 'bat') GL3.player(...catcher.slice(0, 5));
+  if (catcher && cam.key !== 'bat') { GL3.recordDynamic(true); GL3.player(...catcher.slice(0, 5)); GL3.recordDynamic(false); }
+  GL3.endShadows();
 }
 function drawBall(flatOnly) {
   const b = S.ball;
