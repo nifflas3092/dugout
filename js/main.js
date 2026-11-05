@@ -10,7 +10,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const LS = { get(k) { try { return localStorage.getItem('dugout-' + k); } catch (_) { return null; } }, set(k, v) { try { v == null ? localStorage.removeItem('dugout-' + k) : localStorage.setItem('dugout-' + k, v); } catch (_) {} } };
 const forgetDevice = () => { try { Object.keys(localStorage).filter(k => k.startsWith('dugout-') && k !== 'dugout-prefs').forEach(k => localStorage.removeItem(k)); } catch (_) {} };
 const gate = document.getElementById('gate'), appEl = document.getElementById('app');
-const crest = '<div class="crest" aria-hidden="true">D</div>';
+const crest = '<img class="brand-logo" src="icons/logo.svg" alt="" width="72" height="72">';
 const footer = '<footer><button type="button" class="linkish" data-showprefs>Display &amp; accessibility</button> · <a href="privacy.html">Privacy</a></footer>';
 // errors raised by the database's own checks are written for people; anything else gets a generic line
 const friendly = (error, fallback) => (error && error.code === 'P0001' && error.message && error.message.length < 140 ? error.message : fallback);
