@@ -9,9 +9,9 @@ let FENCE_H = 10; // the park sets this (Hampton Park's chain-link is lower)
    and the rogue-lite perks scale the hitting window, power and pitch speed */
 const WIND = { x: 0, z: 0 }, FIELD = { wet: 0 }, MODS = { hitR: 1, power: 1, ts: 1 };
 const ZONE = { lo: 1.5, hi: 3.6, half: 0.71, mid: 2.55 };
-/* Slowpitch: a taken pitch is a strike only if it lands on the plate or the mat behind it, and the arc must peak 6-12 ft. */
+/* Slowpitch: a taken pitch is a strike only if it lands on the plate or the mat behind it, and the arc must peak 6-16 ft. */
 const MAT = { half: 1.42, z0: -0.63, z1: 3.63 }; // a plywood strike board twice the old size, lined up with the batter's boxes
-const ARC = { lo: 5, hi: 16 }; // legal arc: the ball has to peak between 5 and 16 ft
+const ARC = { lo: 6, hi: 16 }; // legal arc: the ball has to peak between 6 and 16 ft
 const onMat = (x, z) => Math.abs(x) <= MAT.half + BALL_R && z >= MAT.z0 - BALL_R && z <= MAT.z1 + BALL_R;
 const BALL_R = 0.16, HIT_R = 0.55, HIT_Y = 0.5; // how far above or below the barrel's center the ball can be and still be hit
 const BAT = { L: 2.75, s0: 0.45, com: 1.65, Ipm: 3.4, rest: -100 * D2R, eUp: 48 * D2R, eFlat: -8 * D2R,
@@ -95,7 +95,7 @@ function resetPitch() {
   S.trail = [];
   S.inHand = true; S.contacted = false; S.caughtByCatcher = false; S.swung = false;
   S.atPlate = null; S.atBat = null; S.contactInfo = null; S.land = null; S.apex = 0; S.t = 0; S.tReal = 0; S.ts = TS_PITCH * MODS.ts;
-  S.twist = 0; S.knocked = false;
+  S.knocked = false;
   if (!humanPitches()) S.lean = 0;
   S.cpuPlan = null; S.batted = null; S.mark = null; S.replay = null; S.rec = []; S.contactRec = null; S.hideBall = false;
   S.arm.a = -90 * D2R; S.arm.w = 0; S.oppStride = 0; S.strideNow = 0; resetHand();
@@ -136,11 +136,11 @@ function launchExact(P) {
 /* ---------- ball flight: gravity, air drag and spin (Magnus) ---------- */
 const KM = 0.0045; // Magnus strength: extra acceleration per (rad/s of spin x ft/s of speed)
 function ballAccel(b) {
-  const sp = Math.hypot(b.vx, b.vy, b.vz), s = b.spin || [0, 0, 0];
+  const sp = Math.hypot(b.vx, b.vy, b.vz), s = b.spin || [0, 0, 0], w = b.noWind ? 0 : 1;
   return [
-    -DRAG * sp * b.vx + KM * (s[1] * b.vz - s[2] * b.vy) + (b.ax || 0) + WIND.x,
+    -DRAG * sp * b.vx + KM * (s[1] * b.vz - s[2] * b.vy) + (b.ax || 0) + WIND.x * w,
     -G - DRAG * sp * b.vy + KM * (s[2] * b.vx - s[0] * b.vz),
-    -DRAG * sp * b.vz + KM * (s[0] * b.vy - s[1] * b.vx) + WIND.z,
+    -DRAG * sp * b.vz + KM * (s[0] * b.vy - s[1] * b.vx) + WIND.z * w,
   ];
 }
 /* Fly a pitch (no bat, no ground) until it reaches depth zEnd. */
@@ -157,8 +157,8 @@ function simPitch(p, v, spin, zEnd = PLATE_Z) {
   return null;
 }
 /* Fly a pitch until it first touches the ground: where, when, and how high it peaked. */
-function simLanding(p, v, spin) {
-  const b = { x: p[0], y: p[1], z: p[2], vx: v[0], vy: v[1], vz: v[2], spin };
+function simLanding(p, v, spin, noWind = false) { // noWind: where it would land on a still day (the pitcher has to allow for the wind)
+  const b = { x: p[0], y: p[1], z: p[2], vx: v[0], vy: v[1], vz: v[2], spin, noWind };
   const dt = 1 / 240; let apex = b.y;
   for (let t = 0; t < 6; t += dt) {
     const a = ballAccel(b);
@@ -176,7 +176,7 @@ function computeLob(tx, tz, apex, spin = [0, 0, 0]) {
   const vy = Math.sqrt(2 * G * Math.max(0.5, apex - p[1]));
   const tUp = vy / G, tDown = Math.sqrt(2 * Math.max(0.1, apex - BALL_R) / G), T = tUp + tDown;
   const v = [(tx - p[0]) / T, vy, (tz - p[2]) / T];
-  for (let k = 0; k < 6; k++) { const r = simLanding(p, v, spin); if (!r) break; v[0] += (tx - r.x) / r.t; v[2] += (tz - r.z) / r.t; }
+  for (let k = 0; k < 6; k++) { const r = simLanding(p, v, spin, true); /* the CPU aims as if it were calm: the wind pushes its pitches too */ if (!r) break; v[0] += (tx - r.x) / r.t; v[2] += (tz - r.z) / r.t; }
   return { p, releaseA, v, spin, ax: 0, mph: Math.round(Math.hypot(...v) * 0.6818) };
 }
 function cpuPickPitch() {
@@ -198,7 +198,7 @@ function cpuPickPitch() {
    ~0.1 s so small jitters don't matter), its arc from where in the swing you let go, and its aim from the hand. ---------- */
 const FLICK = { stride: 1.4, releaseA: -125 * D2R };
 const LEAN = { x: 1.1, drop: 0.25, yaw: 0.024 };   // how far a full lean moves the hand, and how much it angles the pitch back across
-const TWIST = { spin: 8 };                           // full wrist twist: sidespin (rad/s) for about 2 ft of curve
+const CURVE = { k: 2.6, max: 12 };                   // sweeping the mouse sideways as you let go: sidespin per ft/s of sweep (about 3 ft of break at full)
 const ARMC = { kp: 420, kd: 38, amax: 1100, latMax: 0.9, speedMid: 41.5, speedSpread: 8, handMid: 18, handSoft: 11, minHand: 10 };
 const YAW0 = (() => { const h = armHandAt(-115 * D2R); return Math.atan2(-h[0], h[2] - FLICK.stride - PLATE_Z); })();
 const PFWD = [Math.sin(YAW0), 0, -Math.cos(YAW0)];
@@ -224,11 +224,12 @@ function pitchFromArm() {
   const speed = ARMC.speedMid + ARMC.speedSpread * Math.tanh((hand - ARMC.handMid) / ARMC.handSoft);
   const past = -90 - S.arm.a / D2R; // degrees past the bottom of the swing
   const elev = clamp(36 + 0.35 * past, 28, 52) * D2R; // later release = a bit more arc, within a sane range
-  const yaw = YAW0 - h.lat * 0.035 - latv * 0.012 - (S.lean || 0) * LEAN.yaw; // from a lean, it comes back across on an angle
+  const yaw = YAW0 - h.lat * 0.035 - latv * 0.004 - (S.lean || 0) * LEAN.yaw; // from a lean, it comes back across on an angle
   const f = [Math.sin(yaw), 0, -Math.cos(yaw)];
   const v = [f[0] * speed * Math.cos(elev), speed * Math.sin(elev), f[2] * speed * Math.cos(elev)];
-  // wrist twist (right button + wheel): + curves out (toward first base), - curves in
-  return { p: handPos(), v, spin: [4, clamp(-latv * 0.8, -6, 6) - (S.twist || 0) * TWIST.spin, 0], ax: 0, releaseA: S.arm.a, mph: Math.round(speed * 0.6818), speed, twist: S.twist || 0, lean: S.lean || 0 };
+  // the curve: whichever way the hand is sweeping as you let go, the ball breaks that way
+  const curve = clamp(-latv * CURVE.k, -CURVE.max, CURVE.max);
+  return { p: handPos(), v, spin: [4, curve, 0], ax: 0, releaseA: S.arm.a, mph: Math.round(speed * 0.6818), speed, curve: -curve / CURVE.max, lean: S.lean || 0 };
 }
 /* ---------- the bat: hands follow the mouse, bat is a pendulum hanging off the hands ---------- */
 /* The bat is a weighted object pulled toward where the mouse says it should be (a stiff spring with damping
@@ -325,14 +326,16 @@ function stepFlight(dt, script) {
   const N = 12, h = dt / N, hs = h * S.ts;
   const toX = bt.hx, toY = bt.hy;
   for (let i = 1; i <= N; i++) {
-    const zPrev = b.z;
+    const zPrev = b.z, xPrev = b.x, yPrev = b.y;
     const ac = ballAccel(b); b.vx += ac[0] * hs; b.vy += ac[1] * hs; b.vz += ac[2] * hs;
     b.x += b.vx * hs; b.y += b.vy * hs; b.z += b.vz * hs;
     if (b.y < BALL_R && b.vy < 0) { b.y = BALL_R; b.vy = -b.vy * 0.35; b.vx *= 0.6; b.vz *= 0.6; b.spin = [0, 0, 0]; }
     if (zPrev > PLATE_Z && b.z <= PLATE_Z && !S.atPlate) S.atPlate = { x: b.x, y: b.y };
     const zBat = bt.bz + 0.3; // where a hitter meets it: just out in front of him
     if (zPrev > zBat && b.z <= zBat && !S.atBat) S.atBat = { phi: bt.phi, w: bt.w, ballY: b.y, barrelY: bt.hy + Math.sin(bt.e) * BAT.L * 0.74 };
-    if (!S.contacted) { S.apex = Math.max(S.apex, b.y); if (!S.land && b.y <= BALL_R + 0.01) { S.land = { x: b.x, z: b.z }; if (!S.knocked) { S.knocked = true; UI.sound(onMat(b.x, b.z) ? 'knock' : 'thud'); } } }
+    if (!S.contacted) { S.apex = Math.max(S.apex, b.y); if (!S.land && b.y <= BALL_R + 0.01) { // where it really touched down (between steps), so a ball that clips the edge counts
+      const k = yPrev > b.y ? clamp((yPrev - BALL_R) / (yPrev - b.y), 0, 1) : 1;
+      S.land = { x: xPrev + (b.x - xPrev) * k, z: zPrev + (b.z - zPrev) * k }; if (!S.knocked) { S.knocked = true; UI.sound(onMat(S.land.x, S.land.z) ? 'knock' : 'thud'); } } }
     if (human) {
       bt.hy = from[1] + (toY - from[1]) * i / N;
       stepBatPhys(h);

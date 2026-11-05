@@ -935,7 +935,7 @@ function trail() { S.trail.push([S.ball.x, S.ball.y, S.ball.z]); if (S.trail.len
 
 /* ---------- prompt + hint ---------- */
 let lastPrompt = null, lastHint = '';
-const HINT_PITCH = `<b>Pitching:</b> hold the right button and roll the wheel to twist your wrist (up curves it out, down curves it in). Hold A or D to lean left or right and change the angle. Hold the left button and the arm is yours: mouse down swings it back, up swings it through, left and right moves the hand out to the side. Let go while it's coming through. The pitch goes as fast as the arm is really swinging; let go earlier for a flatter pitch, later for more arc. The ring on the dirt and the box show where it lands if you let go now. Arc it 5 to 16 ft and drop it on the plate or plywood board for a strike. The ring and the box show where it would land right now.`;
+const HINT_PITCH = `<b>Pitching:</b> to curve it, sweep the mouse left or right as you let go: the faster the sweep, the bigger the break, and it breaks the way you swept. The wind pushes the ball too (the arrow in the box shows it; the ring shows a still day). Hold A or D to lean left or right and change the angle. Hold the left button and the arm is yours: mouse down swings it back, up swings it through, left and right moves the hand out to the side. Let go while it's coming through. The pitch goes as fast as the arm is really swinging; let go earlier for a flatter pitch, later for more arc. The ring on the dirt and the box show where it lands if you let go now. Arc it 6 to 16 ft and drop it on the plate or plywood board for a strike. `;
 const HINT_BAT = `<b>Batting:</b> the pitch drops in on an arc. A/D (or ←/→) step toward or away from the plate, W/S (or ↑/↓) move up or back in the box. Mouse left and right drives the bat around your body with no lag: far left is loaded by your back shoulder, the middle is through the zone, far right is the follow-through. Up and down sets the height. Move fast to swing hard. The ring slides left and right to wherever the pitch is crossing, and once the pitch starts dropping a ring on the ground shows where it will land; you set the height and the timing. Match the height of the ball as it comes down: square it up and it jumps, catch the top and it's a grounder, the bottom and it's a pop-up. Swinging all-out hits it harder but makes it harder to square up. Early pulls it, late goes the other way. Take a pitch that lands on the plate or board and it's a strike.`;
 function prompt() {
   let p = '', h = '';
@@ -944,8 +944,8 @@ function prompt() {
     case 'lobbyWait': p = `Waiting for your rival · code <b>${net.code || ''}</b>`; h = 'Send your rival the code. They open this page, pick Online 1v1 and join with it.'; break;
     case 'windup':
       p = !S.grip ? '<b>Hold the button</b> to take the ball' : S.arm.w < -4 ? 'Let go when the ring is <b>on the board</b>' : 'Pull <b>down</b> to bring it back, then <b>swing up</b>';
-      { const tw = S.twist || 0, ln = S.lean || 0, bits = [];
-        if (tw) bits.push(`curve <b>${tw > 0 ? 'out' : 'in'} ${Math.round(Math.abs(tw) * 100)}%</b>`);
+      { const R = S.grip && mouse.down ? flickPreview() : null, cv = R && R.curve || 0, ln = S.lean || 0, bits = [];
+        if (Math.abs(cv) > 0.12) bits.push(`curving <b>${cv > 0 ? 'out' : 'in'} ${Math.round(Math.abs(cv) * 100)}%</b>`);
         if (Math.abs(ln) > 0.15) bits.push(`leaning <b>${ln > 0 ? 'left' : 'right'}</b>`);
         if (bits.length) p += ' · ' + bits.join(' · '); }
       h = HINT_PITCH; break;
@@ -2629,7 +2629,7 @@ function drawGuides() {
   if (S.phase === 'windup' && cam.key === 'pitch') {
     // reach of the arm
     // where it would come down if you let go now, marked on the ground
-    const R = flickPreview(), L = R ? simLanding(R.p, R.v, R.spin) : null;
+    const R = flickPreview(), L = R ? simLanding(R.p, R.v, R.spin, true) : null;
     if (L && L.z > -12 && L.z < 48) {
       const ok = onMat(L.x, L.z) && L.apex >= ARC.lo && L.apex <= ARC.hi;
       const pts = []; for (let d = 0; d <= 360; d += 20) pts.push([L.x + Math.cos(d * D2R) * 0.45, 0.05, L.z + Math.sin(d * D2R) * 0.45]);
@@ -2641,7 +2641,7 @@ function drawGuides() {
 /* Inset: where the ball would come down if you let go right now, seen from above, plus how high it would arc.
    Real physics, just predicted. */
 function drawPitchGuide() {
-  const R = flickPreview() || { mph: 0, speed: 0 }, L = R.v ? simLanding(R.p, R.v, R.spin) : null;
+  const R = flickPreview() || { mph: 0, speed: 0 }, L = R.v ? simLanding(R.p, R.v, R.spin, true) : null;
   const bw = Math.min(170, W * 0.32), bh = bw * 1.25, x0 = W - bw - 12, y0 = H - bh - 12;
   ctx.fillStyle = 'rgba(10,15,31,.8)'; ctx.fillRect(x0, y0, bw, bh);
   ctx.strokeStyle = 'rgba(243,234,210,.25)'; ctx.lineWidth = 1; ctx.strokeRect(x0 + 0.5, y0 + 0.5, bw - 1, bh - 1);
@@ -2667,6 +2667,15 @@ function drawPitchGuide() {
   }
   ctx.textAlign = 'left'; ctx.font = `700 12px ${FONT_D}`; ctx.fillStyle = arcOk ? '#7fd36b' : 'rgba(243,234,210,.8)';
   ctx.fillText(arcTxt, x0 + 8, y0 + bh - 6);
+  // the wind, seen from above the same way as the box (the pitcher's side at the top)
+  const wm = Math.hypot(WIND.x, WIND.z), mph = Math.round(wm * 2.2);
+  if (mph >= 2) {
+    const ax = x0 + bw - 22, ay = y0 + bh - 32, ux = WIND.x / wm, uz = -WIND.z / wm, len = 9 + Math.min(9, wm * 2);
+    ctx.save(); ctx.translate(ax, ay); ctx.rotate(Math.atan2(uz, ux));
+    ctx.strokeStyle = ctx.fillStyle = '#8fd3ff'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(-len, 0); ctx.lineTo(len - 5, 0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(len, 0); ctx.lineTo(len - 7, -5); ctx.lineTo(len - 7, 5); ctx.closePath(); ctx.fill(); ctx.restore();
+    ctx.textAlign = 'right'; ctx.font = `700 10px ${FONT_D}`; ctx.fillStyle = '#8fd3ff'; ctx.fillText(`WIND ${mph}`, x0 + bw - 6, ay - 14);
+  }
 }
 function draw() {
   const moving = cam.key === 'field' || cam.shake > 0.3;
@@ -2781,19 +2790,9 @@ cv.addEventListener('pointermove', e => {
   if (e.getCoalescedEvents) { const evs = e.getCoalescedEvents(); if (evs.length) { evs.forEach(setMouse); return; } }
   setMouse(e);
 });
-/* wrist twist: hold the right button and roll the wheel. Up curves the pitch out (toward first base), down curves it in */
-const wrist = { held: false };
-cv.addEventListener('contextmenu', e => e.preventDefault());
-cv.addEventListener('mousedown', e => { if (e.button === 2) wrist.held = true; });
-addEventListener('mouseup', e => { if (e.button === 2) wrist.held = false; });
-cv.addEventListener('wheel', e => {
-  if (!S || S.phase !== 'windup' || !humanPitches()) return;
-  if (!wrist.held) return;
-  e.preventDefault();
-  S.twist = clamp(Math.round(((S.twist || 0) + (e.deltaY < 0 ? 0.25 : -0.25)) * 4) / 4, -1, 1);
-}, { passive: false });
+cv.addEventListener('contextmenu', e => { if (S && S.phase === 'windup') e.preventDefault(); });
 cv.addEventListener('pointerdown', e => {
-  if (e.pointerType === 'mouse' && e.button !== 0) return; // right button: the wrist (below)
+  if (e.pointerType === 'mouse' && e.button !== 0) return; // left button only
   setMouse(e); ac();
   try { cv.setPointerCapture(e.pointerId); } catch (_) {}
   mouse.down = true;
