@@ -13,7 +13,7 @@ const ZONE = { lo: 1.5, hi: 3.6, half: 0.71, mid: 2.55 };
 const MAT = { half: 1.42, z0: -0.63, z1: 3.63 }; // a plywood strike board twice the old size, lined up with the batter's boxes
 const ARC = { lo: 6, hi: 16 }; // legal arc: the ball has to peak between 6 and 16 ft
 const onMat = (x, z) => Math.abs(x) <= MAT.half + BALL_R && z >= MAT.z0 - BALL_R && z <= MAT.z1 + BALL_R;
-const BALL_R = 0.16, HIT_R = 0.66, HIT_Y = 0.6; // how far above or below the barrel's center the ball can be and still be hit
+const BALL_R = 0.16, HIT_R = 0.76, HIT_Y = 0.69; // how far above or below the barrel's center the ball can be and still be hit
 const BAT = { L: 2.75, s0: 0.45, com: 1.65, Ipm: 3.4, rest: -100 * D2R, eUp: 48 * D2R, eFlat: -8 * D2R,
   drive: 0, damp: 0, maxW: 90, hz: 2.0, box: { x0: -3.3, x1: -1.75, y0: 0.9, y1: 4.4 }, handSpd: 160 };
 const ARM = { S: [-0.85, 4.7, 50.3], R: 2.35 };

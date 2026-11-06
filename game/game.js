@@ -1716,8 +1716,8 @@ function drawBatStick(hands) {
     poly(pts, 'rgba(243,234,210,.12)');
   }
   line3(addv(hands, mul(d, -0.2)), addv(hands, mul(d, 0.95)), 0.11, '#1b1b1b');
-  line3(addv(hands, mul(d, 0.95)), addv(hands, mul(d, BAT.L)), 0.25, '#c9ced6');
-  line3(addv(hands, mul(d, 1.6)), addv(hands, mul(d, 2.15)), 0.255, '#e2553f');
+  line3(addv(hands, mul(d, 0.95)), addv(hands, mul(d, BAT.L)), 0.2875, '#c9ced6');
+  line3(addv(hands, mul(d, 1.6)), addv(hands, mul(d, 2.15)), 0.293, '#e2553f');
 }
 function drawPitcher() {
   const t = fieldingTeam(), col = teamCol(t), dk = teamDark(t);
@@ -2395,7 +2395,7 @@ void main(){ vec4 e = fract(gl_FragCoord.z * vec4(1.0, 255.0, 65025.0, 16581375.
   }
   function drawBat(b) {
     const [X, Z] = frameOf(b.d);
-    part(G.bat, [1, 1, 1], b.a, X, b.d, Z, 1.2, 1, 1.2, { tex: batTex, spec: 0.7 }); // a 20% fatter barrel to match the bigger sweet spot
+    part(G.bat, [1, 1, 1], b.a, X, b.d, Z, 1.38, 1, 1.38, { tex: batTex, spec: 0.7 }); // a fatter barrel (+20%, then +15% wider) to match the bigger sweet spot
   }
   function drawBallGL() {
     const b = S.ball, p = [b.x, b.y, b.z], dist = Math.max(1, toCam(p)[2]), r = Math.max(BALL_R * 1.15, 2.6 * dist / focal);
