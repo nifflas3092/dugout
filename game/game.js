@@ -80,6 +80,7 @@ function updateCam(dt) {
 let bannerTimer = 0;
 const hooks = {
   banner(text, sub, size) {
+    if (/^(Home run|Grand slam)/.test(text)) celebrateHR();
     const el = $('banner');
     el.className = 'banner' + (size ? ' ' + size : '');
     el.innerHTML = ''; el.append(text);
@@ -186,7 +187,37 @@ function play(name) {
     case 'thud': noise(0.06, 160, 0.8, 0.35, 'lowpass'); break; // into the dirt
     case 'thunder': { const a = ac(); if (!a) break; noise(1.8, 90, 0.4, 1.1, 'lowpass'); setTimeout(() => noise(1.2, 60, 0.3, 0.8, 'lowpass'), 250); break; }
     case 'cheer': crowd.roar(); break;
+    case 'boom': tone(72, 0.7, 0.32, 'sine', -38); tone(48, 0.9, 0.22, 'sine', -14); noise(0.5, 170, 0.5, 0.28, 'lowpass'); break; // a soft, low firework thump
   }
+}
+/* home run fireworks: a few thin, quick bursts high over the outfield (about two seconds, then gone) */
+const FW = { bursts: [], until: 0 };
+const FW_COLS = ['255,214,120', '255,250,235', '120,214,206'];
+function celebrateHR() {
+  const now = performance.now(); if (now < FW.until - 1500) return; // one show per homer
+  FW.until = now + 2200;
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  [0, 380, 760, 1150].forEach((delay, k) => setTimeout(() => {
+    play('boom');
+    if (reduce) return;
+    FW.bursts.push({ x: W * (0.2 + 0.6 * Math.random()), y: H * (0.12 + 0.18 * Math.random()), t: 0, n: 16 + (k % 2) * 6, r: Math.min(W, H) * (0.09 + 0.05 * Math.random()), c: FW_COLS[k % FW_COLS.length], spin: Math.random() * 6 });
+  }, delay));
+}
+function drawFireworks(dt) {
+  if (!FW.bursts.length) return;
+  for (const b of FW.bursts) b.t += dt;
+  FW.bursts = FW.bursts.filter(b => b.t < 1.1);
+  ctx.save(); ctx.lineCap = 'round';
+  for (const b of FW.bursts) {
+    const k = b.t / 1.1, ease = 1 - (1 - Math.min(1, b.t / 0.45)) ** 3, a = Math.max(0, 1 - k) ** 1.4, drop = k * k * b.r * 0.35;
+    ctx.strokeStyle = `rgba(${b.c},${a})`; ctx.lineWidth = Math.max(1.2, 2.4 * (1 - k * 0.6));
+    for (let i = 0; i < b.n; i++) {
+      const ang = b.spin + i / b.n * Math.PI * 2, r1 = b.r * ease, r0 = r1 * 0.72;
+      ctx.beginPath(); ctx.moveTo(b.x + Math.cos(ang) * r0, b.y + Math.sin(ang) * r0 + drop); ctx.lineTo(b.x + Math.cos(ang) * r1, b.y + Math.sin(ang) * r1 + drop); ctx.stroke();
+    }
+    if (b.t < 0.12) { ctx.fillStyle = `rgba(255,255,255,${0.5 - b.t * 4})`; ctx.beginPath(); ctx.arc(b.x, b.y, 4 + b.t * 30, 0, Math.PI * 2); ctx.fill(); } // the pop
+  }
+  ctx.restore();
 }
 
 /* ---------- conditions: the park and the weather ---------- */
@@ -3026,6 +3057,7 @@ function draw() {
   const vg = BG.vg;
   ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
   drawWeather(1 / 60);
+  drawFireworks(1 / 60);
   for (const s of sparks) { const p = P(s.p); if (!p) continue; ctx.fillStyle = `rgba(255,230,150,${s.life * 2.4})`; ctx.fillRect(p[0] - 1.5, p[1] - 1.5, 3, 3); }
   ctx = mainCtx;
 }
