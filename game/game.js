@@ -46,7 +46,7 @@ function mouseRay(sx, sy) { const xn = (sx - W / 2) / focal, yn = (H / 2 - sy) /
 
 function camKey() {
   if (S && (S.phase === 'batted' || S.phase === 'result') && S.batted) return 'field';
-  if (S && humanPitches() && ['windup', 'throwing', 'flight', 'waitPlay', 'replay', 'wait', 'result'].includes(S.phase)) return 'pitch'; // one static shot for the whole pitch
+  if (S && humanPitches() && ['windup', 'throwing', 'flight', 'waitPlay', 'replay', 'waitFinal', 'wait', 'result'].includes(S.phase)) return 'pitch'; // one static shot for the whole pitch
   return 'bat';
 }
 function updateCam(dt) {
@@ -620,7 +620,7 @@ function nextPitch() {
   else {
     S.phase = 'waitPitch';
     const m = net.pending; net.pending = null;
-    if (m && m.gid === S.gid && m.seq === S.seq + 1) startOppWindup(m.P, 0.8);
+    if (m && m.gid === S.gid && m.seq === S.seq + 1) startOppWindup(m.P, 0.45);
   }
   netPresence();
 }
@@ -628,7 +628,8 @@ function startOppWindup(P, dur) { S.phase = 'oppWindup'; S.timer = 0; S.oppPitch
 function releaseMyPitch(P) { S.phase = 'throwing'; S.timer = 0; S.myPitch = S.mode === 'online' ? roundP(P) : P; S.throwFrom = S.arm.a; } // online: throw exactly what the rival will see
 function afterMyLaunch() {
   if (S.mode !== 'online') { beginFlight(); return; }
-  S.phase = 'waitPlay'; S.hideBall = true;
+  // watch your own pitch fly straight away; it drifts into slow motion near the plate until the batter's swing arrives
+  S.replay = { pending: true, rec: [] }; S.phase = 'replay'; S.t = 0; S.tReal = 0; S.trail = []; S.hideBall = false; net.finalPlay = null;
   net.lastPitchMsg = { gid: S.gid, seq: S.seq + 1, P: roundP(S.myPitch), th: S.myThrows || 'R' };
   net.pitchSentAt = performance.now();
   net.lastOut = { k: 'pitch', ...net.lastPitchMsg }; netPresence(); // the reliable copy: presence is re-sent until the rival has it
@@ -773,11 +774,22 @@ function onRemotePitch(d) {
   if (!S || S.mode !== 'online' || !d || d.gid !== S.gid || humanPitches()) return;
   if (d.th === 'L' || d.th === 'R') S.oppThrows = d.th;
   if (d.seq === S.seq + 1) {
-    if (S.phase === 'waitPitch') startOppWindup(d.P, 0.8);
+    if (S.phase === 'waitPitch') startOppWindup(d.P, 0.45);
     else if (!['oppWindup', 'flight', 'batted'].includes(S.phase)) net.pending = d;
   } else if (net.lastPlay && d.seq === net.lastPlay.seq) {
     net.rm && net.rm.emit('play', net.lastPlay).catch(netErr); // our answer was lost: say it again
+  } else if (net.lastHit && d.seq === net.lastHit.seq) {
+    net.rm && net.rm.emit('play', net.lastHit).catch(netErr);
   }
+}
+function sendHit() { // the instant the ball is hit: the swing so far and where the ball is going (the result follows later)
+  const msg = { gid: S.gid, seq: S.seq + 1, rec: S.rec,
+    contact: { t: round(S.contactRec.t), ball: Object.fromEntries(Object.entries(S.contactRec.ball).map(([k, v]) => [k, round(v)])) },
+    out: JSON.parse(JSON.stringify(S.batted.out, (k, v) => typeof v === 'number' ? round(v) : v)) };
+  while (JSON.stringify(msg).length > 3000 && msg.rec.length > 8) msg.rec = msg.rec.filter((_, i) => i % 2 === 0);
+  net.lastHit = msg;
+  net.lastOut = { k: 'play', ...msg }; netPresence();
+  net.rm && net.rm.emit('play', msg).catch(netErr);
 }
 function sendPlay(result) {
   const out = S.batted ? S.batted.out : null;
@@ -793,8 +805,14 @@ function sendPlay(result) {
   net.rm && net.rm.emit('play', msg).catch(netErr);
 }
 function onRemotePlay(d) {
-  if (!S || S.mode !== 'online' || !d || d.gid !== S.gid) return;
-  if (S.phase !== 'waitPlay' || d.seq !== S.seq + 1) return;
+  if (!S || S.mode !== 'online' || !d || d.gid !== S.gid || d.seq !== S.seq + 1) return;
+  if (d.res) net.finalPlay = d; // the finished play (result and score); a message without res is the early "it's hit" one
+  if (S.phase === 'replay' && S.replay && S.replay.pending) { // our pitch is already in the air on this screen: carry on with their swing
+    S.replay = { ...d, pending: false };
+    return;
+  }
+  if (S.phase === 'waitFinal' && net.finalPlay) { S.replay = net.finalPlay; finishRemote(); return; }
+  if (S.phase !== 'waitPlay') return;
   S.replay = d;
   const P = S.lastPitch;
   resetBallTo(P);
@@ -828,7 +846,7 @@ function finishRemote() {
 }
 function netTick(now) {
   if (!net.rm || !S || S.mode !== 'online') return;
-  if (S.phase === 'waitPlay' && net.lastPitchMsg && now - net.pitchSentAt > 1600) {
+  if ((S.phase === 'waitPlay' || (S.phase === 'replay' && S.replay && S.replay.pending)) && net.lastPitchMsg && now - net.pitchSentAt > 1200) {
     net.pitchSentAt = now; net.rm.emit('pitch', net.lastPitchMsg).catch(netErr);
   }
   // keep a rival who reloaded or missed a message in step with us
@@ -967,22 +985,29 @@ function update(dt) {
         const b = S.bat; S.rec.push([round(S.tReal), round(b.phi), round(b.e), round(b.hx), round(b.hy), round(b.hz), round(b.bx, 100), round(b.bz, 100)]); S.recNext += 1 / 30;
       }
       trail();
-      if (r === 'contact') { swingFeedback(true); startBatted(); }
+      if (r === 'contact') { swingFeedback(true); startBatted(); if (S.mode === 'online' && S.iBatThisPitch) sendHit(); }
       else if (r === 'done') { swingFeedback(false); if (PRACTICE(S.mode)) practiceResult(false); else { const res = applyPitchCall(); finishPlay(res, res.size === 'small' ? 1.0 : 1.7); } }
       break;
     }
     case 'replay': {
       const m = S.replay;
+      if (m.pending) { // haven't heard from the batter yet: float in, slowing right down near the plate
+        if (S.ball.z > 3) stepFlight(dt * (S.ball.z > 16 ? 0.9 : 0.3), replayBat);
+        trail();
+        break;
+      }
       const r = stepFlight(dt, replayBat);
       trail();
       if (m.contact && S.tReal >= m.contact.t) { Object.assign(S.ball, m.contact.ball); S.contacted = true; startBatted(m.out); }
-      else if (!m.contact && (r === 'done' || S.tReal > m.endT + 0.3)) finishRemote();
+      else if (!m.contact && (r === 'done' || S.tReal > m.endT + 0.3)) { if (m.res) finishRemote(); else S.phase = 'waitFinal'; }
       break;
     }
     case 'batted': {
       const r = stepBatted(dt);
       trail();
       if (r === 'done') {
+        if (S.replay && !S.replay.res && net.finalPlay && net.finalPlay.seq === S.seq + 1) S.replay = net.finalPlay;
+        if (S.replay && !S.replay.res) { S.phase = 'waitFinal'; break; } // their screen hasn't finished the play yet
         if (S.replay) finishRemote();
         else if (PRACTICE(S.mode)) practiceResult(true);
         else { const res = applyBattedOutcome(S.batted.out); finishPlay(res, res.size === 'small' ? 1.0 : res.size === 'huge' ? 2.6 : 1.9); }
@@ -1050,7 +1075,8 @@ function prompt() {
         if (bits.length) p += ' · ' + bits.join(' · '); }
       h = HINT_PITCH; break;
     case 'waitPlay': p = 'Rival is swinging…'; h = HINT_PITCH; break;
-    case 'replay': p = ''; break;
+    case 'replay': p = S.replay && S.replay.pending ? 'Rival is swinging…' : ''; break;
+    case 'waitFinal': p = 'Waiting for the call…'; break;
     case 'waitPitch': p = 'Rival is on the mound…'; h = HINT_BAT; break;
     case 'oppWindup': case 'flight': h = humanBats() ? HINT_BAT : (online ? HINT_PITCH : 'CPU is batting.'); break;
   }
@@ -2925,7 +2951,7 @@ function drawBall(flatOnly) {
 }
 function drawGuides() {
   const k = cam.key;
-  if ((k === 'bat' || k === 'pitch') && !S.contacted && ['windup', 'throwing', 'waitPlay', 'replay', 'waitPitch', 'oppWindup', 'flight', 'result', 'wait', 'idle', 'lobbyWait'].includes(S.phase)) {
+  if ((k === 'bat' || k === 'pitch') && !S.contacted && ['windup', 'throwing', 'waitPlay', 'replay', 'waitFinal', 'waitPitch', 'oppWindup', 'flight', 'result', 'wait', 'idle', 'lobbyWait'].includes(S.phase)) {
     if (S.mark && S.phase === 'result' && S.mark.z !== undefined) { // where the pitch came down
       const pts = []; for (let d = 0; d <= 360; d += 20) pts.push([S.mark.x + Math.cos(d * D2R) * 0.3, 0.04, S.mark.z + Math.sin(d * D2R) * 0.3]);
       polyline(pts, S.mark.strike ? '#ffcf6b' : '#7fd36b', 2.5);
