@@ -511,6 +511,11 @@ function startPractice(mode) {
   if (mode === 'bullpen') S.half = 1; // you're on the mound, the CPU batter just stands in and takes
   S.prac = { kind, hr: 0, outs: 0, longest: 0, swings: 0, pitches: 0, strikes: 0, legal: 0, streak: 0, best: 0, last: '' };
   if (kind === 'rogue') { S.rogue = ROGUE.fresh(); ROGUE.stageStart(); }
+  if (kind === 'derby') { // a pure home run derby: nobody in the field, and the batter stays in the box
+    S.noField = true;
+    S.fielders.forEach(f => { if (f.kind === 'IF' || f.kind === 'OF') f.base = [f.base[0] * 3, 900]; });
+    resetPitch();
+  }
   if (kind === 'targets') {
     S.prac.targets = makeTargets(); S.prac.timeLeft = TARGET_TIME;
     S.fielders.forEach(f => { if (f.kind === 'IF' || f.kind === 'OF') f.base = [f.base[0] * 3, 600]; }); // the fielders clear out (they'd stand in front of the targets)
@@ -1775,7 +1780,7 @@ function pathPos(from, d) { // d feet along the base paths starting at base `fro
 let RUNPLAN = null;
 function runnerPlan() {
   const bt = S.batted;
-  if (!bt || !bt.out || PRACTICE(S.mode) && S.mode !== 'derby' || isTargets()) return null; // no running in target practice
+  if (!bt || !bt.out || PRACTICE(S.mode) && S.mode !== 'derby' || isTargets() || S.noField) return null; // no running in target practice or the plain derby
   if (RUNPLAN && RUNPLAN.bt === bt) return RUNPLAN;
   const out = bt.out, b0 = bt.bases0 || [0, 0, 0], t = battingTeam(), R = [], calls = [];
   const plan = RUNPLAN = { bt, R, calls, stay: [], batter: null };
@@ -2830,6 +2835,7 @@ function drawPlayersGL(fieldT, batT, pitcherOff) {
   const list = [], ballOn = S.phase !== 'over' && S.phase !== 'idle' && S.phase !== 'lobbyWait' && !S.hideBall && !ballGone();
   S.fielders.forEach((f, i) => {
     if (f.kind === 'C' || (f.kind === 'P' && !pitcherOff)) return;
+    if (S.noField && (f.kind === 'IF' || f.kind === 'OF')) return; // the derby has no fielders
     const isP = f.kind === 'P', B = bodyFor(isP ? 'pit' + fieldT : 'f' + fieldT + '-' + i, f.build, fieldT);
     list.push([Object.assign(GL3.standingPose([f.x, 0, f.z], f.face ?? Math.atan2(-f.x, -f.z), fielderAction(f, i), B), { id: 'f' + i }), B, fieldT, isP ? NUMS.pitcher[fieldT] : FIELD_NUMS[i], '', [f.x, 0, f.z]]);
   });
@@ -2986,6 +2992,7 @@ function draw() {
   if (GL3) GL3.clear();
   S.fielders.forEach((f, i) => {
     if (f.kind === 'C' || (f.kind === 'P' && !pitcherOff)) return;
+    if (S.noField && (f.kind === 'IF' || f.kind === 'OF')) return; // the derby has no fielders
     objs.push({ d: depth([f.x, 3, f.z]), fn: () => fig(() => standing([f.x, 0, f.z], f.face ?? Math.atan2(-f.x, -f.z), teamCol(fieldT), teamDark(fieldT), { run: f.run, hold: S.ball.held === i, num: f.kind === 'P' ? NUMS.pitcher[fieldT] : FIELD_NUMS[i], body: bodyFor(f.kind === 'P' ? 'pit' + fieldT : 'f' + fieldT + '-' + i, f.build, fieldT) }), [f.x, 0, f.z]) });
   });
   const rn2 = runnersNow();
